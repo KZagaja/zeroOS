@@ -1,0 +1,3 @@
+package,version,need,owner,maintenance,license,architectures,attack_surface,classification
+cargo-deny,0.19.4,dependency policy checks,Kordian Zagaja,Pin and review advisories,MIT OR Apache-2.0,x86_64 and aarch64,CI build tooling,Retain
+
