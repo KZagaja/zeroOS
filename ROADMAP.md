@@ -7,14 +7,14 @@ This document is the authoritative product, architecture, and delivery specifica
 Snapshot date: 2026-08-05
 
 - Architecture decisions in this document: **Accepted**.
-- Repository implementation: **M0 foundation achieved**.
-- Implementation milestones: M0 **Achieved**; M1 **In progress**; M2–M11 **Not started**.
+- Repository implementation: **M1 dual-architecture UEFI bootstrap achieved**.
+- Implementation milestones: M0–M1 **Achieved**; M2–M11 **Not started**.
 - A milestone may become **Achieved** only after every acceptance item passes and its dated evidence is recorded here.
 
 | Milestone | Status | Evidence |
 | --- | --- | --- |
 | M0 — Repository Foundation | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/30998375727) |
-| M1 — Dual-Architecture UEFI Bootstrap | In progress | Implementation begun 2026-08-05; M0 evidence preserved below. |
+| M1 — Dual-Architecture UEFI Bootstrap | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/31007390950) |
 | M2 — Resident Core Runtime | Not started | — |
 | M3 — Storage, Updates, and Recovery | Not started | — |
 | M4 — Hardware and Rust Policy Services | Not started | — |
@@ -189,7 +189,7 @@ cargo xtask check
 
 ## M1 — Dual-Architecture UEFI Bootstrap
 
-**Status:** In progress
+**Status:** Achieved
 **Intent:** Prove the complete boot chain on both supported architectures before expanding userspace.
 
 **Deliverables**
@@ -201,10 +201,10 @@ cargo xtask check
 
 **Automated acceptance criteria**
 
-- [ ] Both images are built from a clean checkout through `xtask`.
-- [ ] Each QEMU guest boots via UEFI and prints exactly `zeroOS init: READY` to captured output.
-- [ ] PID 1 requests and completes a clean poweroff on both guests.
-- [ ] Image inspection verifies GPT, FAT, correct fallback EFI filename, kernel, and initramfs contents.
+- [x] Both images are built from a clean checkout through `xtask`.
+- [x] Each QEMU guest boots via UEFI and prints exactly `zeroOS init: READY` to captured output.
+- [x] PID 1 requests and completes a clean poweroff on both guests.
+- [x] Image inspection verifies GPT, FAT, correct fallback EFI filename, kernel, and initramfs contents.
 
 **Acceptance commands**
 
@@ -213,10 +213,15 @@ cargo xtask test --arch x86_64
 cargo xtask test --arch aarch64
 ```
 
-**Dated evidence:** —  
-**Artifact hashes:** —
+**Completion date:** 2026-08-05
+
+**Dated evidence:** Native `x86_64` and `aarch64` jobs passed for implementation commit `45d2adde058d264d7c4ee95f345a2a3d0812b8fd` in [run 31007390950](https://github.com/KZagaja/zeroOS/actions/runs/31007390950).
+
+**Artifact hashes:** `x86_64`: kernel `1ed54eeb38a82fdddc73fdd144bf925c33ac1cda293c483c81d3b3c2fa0f0a44`, init `e0eae0846e69c9d50e0bc1f35cdeb5bf538599156123913c1bf6ac3a9f801ee3`, disk image `a44e1bcec00e10c5a399c4f13b4fa56984516886c2b63a2765458c17613c673e`, build image `sha256:e9cf630b4fc34f5381909d5c263183774c53a4d1c68469ee7c8e6efa5aa3b2dd`; `aarch64`: kernel `75ece3851a91468295da55c0337973caf1a0fe96343a23f4e55677f0250504dc`, init `f7d6bb548968acb420f1909f667eec83d125f8a60b19753d1542350329ddc093`, disk image `2cee338fb5cca9f9157624cb145ba0acb1a1d8a7512a6751142b543882eb6c4e`, build image `sha256:1f8feef5f10bad0124ef5e16e39d9c218e090ec2100ab74434dd5c2e3bda41ed`.
 
 **Change log:** 2026-08-05 — implementation started; acceptance remains pending native CI evidence on both architectures.
+
+**Change log:** 2026-08-05 — achieved after native `x86_64` and `aarch64` build, inspection, UEFI boot, readiness, and clean-poweroff acceptance passed in run 31007390950.
 
 ## M2 — Resident Core Runtime
 
