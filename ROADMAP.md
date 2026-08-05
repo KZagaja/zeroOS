@@ -8,13 +8,13 @@ Snapshot date: 2026-08-05
 
 - Architecture decisions in this document: **Accepted**.
 - Repository implementation: **M0 foundation achieved**.
-- Implementation milestones: M0 **Achieved**; M1–M11 **Not started**.
+- Implementation milestones: M0 **Achieved**; M1 **In progress**; M2–M11 **Not started**.
 - A milestone may become **Achieved** only after every acceptance item passes and its dated evidence is recorded here.
 
 | Milestone | Status | Evidence |
 | --- | --- | --- |
 | M0 — Repository Foundation | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/30998375727) |
-| M1 — Dual-Architecture UEFI Bootstrap | Not started | — |
+| M1 — Dual-Architecture UEFI Bootstrap | In progress | Implementation begun 2026-08-05; M0 evidence preserved below. |
 | M2 — Resident Core Runtime | Not started | — |
 | M3 — Storage, Updates, and Recovery | Not started | — |
 | M4 — Hardware and Rust Policy Services | Not started | — |
@@ -189,7 +189,7 @@ cargo xtask check
 
 ## M1 — Dual-Architecture UEFI Bootstrap
 
-**Status:** Not started  
+**Status:** In progress
 **Intent:** Prove the complete boot chain on both supported architectures before expanding userspace.
 
 **Deliverables**
@@ -215,6 +215,8 @@ cargo xtask test --arch aarch64
 
 **Dated evidence:** —  
 **Artifact hashes:** —
+
+**Change log:** 2026-08-05 — implementation started; acceptance remains pending native CI evidence on both architectures.
 
 ## M2 — Resident Core Runtime
 

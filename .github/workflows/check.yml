@@ -1,4 +1,4 @@
-name: M0
+name: M1
 
 on:
   push:
@@ -24,9 +24,12 @@ jobs:
         with:
           persist-credentials: false
       - name: Build pinned toolchain image
-        run: docker build --pull=false --tag zeroos-build .
-      - name: Check
+        run: |
+          docker build --pull=false --tag zeroos-build .
+          echo "${{ matrix.arch }} build image $(docker image inspect zeroos-build --format '{{.Id}}')"
+      - name: M0 regression gate
         run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask check
-      - name: Architecture tests
+      - name: Build architecture
+        run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask build --arch ${{ matrix.arch }}
+      - name: Boot architecture
         run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask test --arch ${{ matrix.arch }}
-

@@ -1,3 +1,16 @@
 package,version,need,owner,maintenance,license,architectures,attack_surface,classification
 cargo-deny,0.19.4,dependency policy checks,Kordian Zagaja,Pin and review advisories,MIT OR Apache-2.0,x86_64 and aarch64,CI build tooling,Retain
-
+Linux,6.18.42,kernel and native EFI stub,Kordian Zagaja,Pin stable release and review CVEs,GPL-2.0-only,x86_64 and aarch64,kernel and boot boundary,Retain
+QEMU,10.0,native architecture boot acceptance,Kordian Zagaja,Debian snapshot updates,GPL-2.0-only,x86_64 and aarch64,CI emulator,Retain
+EDK2,2025.02,UEFI firmware for QEMU,Kordian Zagaja,Debian snapshot updates,BSD-2-Clause-Patent,x86_64 and aarch64,CI firmware,Retain
+gdisk,1.0.10,GPT image creation and inspection,Kordian Zagaja,Debian snapshot updates,GPL-2.0-only,x86_64 and aarch64,CI image tooling,Retain
+mtools,4.0.48,unprivileged FAT creation and inspection,Kordian Zagaja,Debian snapshot updates,GPL-3.0-or-later,x86_64 and aarch64,CI image tooling,Retain
+dosfstools,4.2,FAT integrity inspection,Kordian Zagaja,Debian snapshot updates,GPL-3.0-only,x86_64 and aarch64,CI image tooling,Retain
+GNU build tools,12.12,Linux build prerequisites,Kordian Zagaja,Debian snapshot updates,GPL-3.0-or-later,x86_64 and aarch64,CI build tooling,Retain
+bc,1.07.1,Linux build arithmetic,Kordian Zagaja,Debian snapshot updates,GPL-3.0-or-later,x86_64 and aarch64,CI build tooling,Retain
+bison,3.8.2,Linux configuration parser build,Kordian Zagaja,Debian snapshot updates,GPL-3.0-or-later,x86_64 and aarch64,CI build tooling,Retain
+flex,2.6.4,Linux lexer build,Kordian Zagaja,Debian snapshot updates,BSD-2-Clause,x86_64 and aarch64,CI build tooling,Retain
+OpenSSL,3.5,Linux host build prerequisite,Kordian Zagaja,Debian snapshot updates,Apache-2.0,x86_64 and aarch64,CI build tooling,Retain
+elfutils,0.192,Linux ELF build prerequisite,Kordian Zagaja,Debian snapshot updates,GPL-2.0-or-later,x86_64 and aarch64,CI build tooling,Retain
+pahole,1.30,Linux BTF build prerequisite,Kordian Zagaja,Debian snapshot updates,GPL-2.0-only,x86_64 and aarch64,CI build tooling,Retain
+cpio,2.15,Linux initramfs generator prerequisite,Kordian Zagaja,Debian snapshot updates,GPL-3.0-or-later,x86_64 and aarch64,CI build tooling,Retain
