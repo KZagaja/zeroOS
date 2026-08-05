@@ -7,13 +7,13 @@ This document is the authoritative product, architecture, and delivery specifica
 Snapshot date: 2026-08-05
 
 - Architecture decisions in this document: **Accepted**.
-- Repository implementation: **M0 foundation in progress**.
-- Implementation milestones: M0 **In progress**; M1–M11 **Not started**.
+- Repository implementation: **M0 foundation achieved**.
+- Implementation milestones: M0 **Achieved**; M1–M11 **Not started**.
 - A milestone may become **Achieved** only after every acceptance item passes and its dated evidence is recorded here.
 
 | Milestone | Status | Evidence |
 | --- | --- | --- |
-| M0 — Repository Foundation | In progress | Local arm64 acceptance passed; native GitHub CI pending. |
+| M0 — Repository Foundation | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/30998375727) |
 | M1 — Dual-Architecture UEFI Bootstrap | Not started | — |
 | M2 — Resident Core Runtime | Not started | — |
 | M3 — Storage, Updates, and Recovery | Not started | — |
@@ -158,7 +158,7 @@ Allowed status values are exactly `Not started`, `In progress`, `Blocked`, and `
 
 ## M0 — Repository Foundation
 
-**Status:** In progress  
+**Status:** Achieved  
 **Intent:** Establish the smallest reproducible monorepo and policy contract on which every later milestone depends.
 
 **Deliverables**
@@ -175,7 +175,7 @@ Allowed status values are exactly `Not started`, `In progress`, `Blocked`, and `
 - [x] A clean checkout passes formatting, linting, license, dependency-policy, and manifest validation.
 - [x] The pinned toolchain and build container are sufficient to run `xtask` without undeclared host dependencies.
 - [x] Two clean builds resolve identical declared inputs and produce matching outputs or a documented, tested normalization for unavoidable metadata.
-- [ ] CI exercises both target architectures.
+- [x] CI exercises both target architectures.
 
 **Acceptance command**
 
@@ -183,8 +183,9 @@ Allowed status values are exactly `Not started`, `In progress`, `Blocked`, and `
 cargo xtask check
 ```
 
-**Dated evidence:** 2026-08-05 local native `aarch64` pinned-container acceptance; GitHub CI pending.  
-**Artifact hashes:** release `xtask` (`aarch64-unknown-linux-gnu`) SHA-256 `21ab809ec66929ebae5d9294eadcba7757a3b9fb8e44b6626713058885e62734`; build base `rust:1.97.1-trixie@sha256:f1400ab14caacbb8a2c4a9730718a737499d930e9e59cc3d6890ae428b4edf0b`.
+**Completion date:** 2026-08-05  
+**Dated evidence:** Native `x86_64` and `aarch64` jobs passed for foundation commit `1fd59d0a20a7095c5e5b9d7bfd402d3ccf78f92c` in [run 30998375727](https://github.com/KZagaja/zeroOS/actions/runs/30998375727).  
+**Artifact hashes:** release `xtask` SHA-256: `x86_64-unknown-linux-gnu` `fa9f7409599e9e3d0d451f7d915c71a6c93b4be41b20796610ecfd8b165d8cd9`; `aarch64-unknown-linux-gnu` `21ab809ec66929ebae5d9294eadcba7757a3b9fb8e44b6626713058885e62734`. Build base: `rust:1.97.1-trixie@sha256:f1400ab14caacbb8a2c4a9730718a737499d930e9e59cc3d6890ae428b4edf0b`.
 
 ## M1 — Dual-Architecture UEFI Bootstrap
 
@@ -526,3 +527,4 @@ Append entries; do not rewrite or remove historical decisions or milestone evide
 | 2026-08-05 | Created the zeroOS 1.0 specification; accepted the architecture and initialized M0–M11 as `Not started`. | Initial authoritative roadmap; repository implementation is empty. |
 | 2026-08-05 | Began M0 repository foundation implementation. | Workspace, policy, reproducible build contract, and native CI implementation started; acceptance remains pending. |
 | 2026-08-05 | Passed local M0 acceptance on native arm64. | Pinned-container `cargo xtask check` and both architecture-context test commands passed; M0 remains `In progress` until both native GitHub jobs pass. |
+| 2026-08-05 | Marked M0 Repository Foundation `Achieved`. | Both native jobs passed foundation commit `1fd59d0a20a7095c5e5b9d7bfd402d3ccf78f92c` in [run 30998375727](https://github.com/KZagaja/zeroOS/actions/runs/30998375727); recorded both release hashes and the build-image digest. |
