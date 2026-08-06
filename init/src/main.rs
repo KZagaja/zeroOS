@@ -301,7 +301,7 @@ impl Runtime {
             if !self.services[index].desired {
                 self.services[index].state = State::Stopping;
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(all(target_os = "linux", not(test)))]
             unsafe {
                 kill(pid as i32, signal);
             }
