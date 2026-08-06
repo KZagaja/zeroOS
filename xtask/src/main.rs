@@ -1,9 +1,10 @@
 use std::{
     collections::HashSet,
     env, fs,
-    fs::File,
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -525,16 +526,115 @@ fn run_qemu(arch: Arch, capture: bool) -> Result<(), String> {
     if !capture {
         return run(&mut qemu, "run QEMU");
     }
-    let log_path = output_dir.join("qemu.log");
-    let log = File::create(&log_path).map_err(error_string)?;
-    qemu.stdout(Stdio::from(log.try_clone().map_err(error_string)?))
-        .stderr(Stdio::from(log));
-    let status = run_with_timeout(&mut qemu, Duration::from_secs(90))?;
+    qemu.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = qemu.spawn().map_err(error_string)?;
+    let mut input = child.stdin.take().expect("piped QEMU stdin");
+    let (lines, received) = mpsc::channel();
+    let readers = vec![
+        qemu_reader(child.stdout.take().unwrap(), lines.clone()),
+        qemu_reader(child.stderr.take().unwrap(), lines.clone()),
+    ];
+    drop(lines);
+    let start = Instant::now();
+    let mut output = String::new();
+    let mut sent_selftest = false;
+    let mut sent_logs = false;
+    let status = loop {
+        while let Ok(line) = received.try_recv() {
+            output.push_str(&line);
+            output.push('\n');
+            if line.trim_end_matches('\r') == READY && !sent_selftest {
+                writeln!(input, "selftest").map_err(error_string)?;
+                input.flush().map_err(error_string)?;
+                sent_selftest = true;
+            }
+            if line.contains("SELFTEST PASS") && !sent_logs {
+                writeln!(input, "logs").map_err(error_string)?;
+                input.flush().map_err(error_string)?;
+                sent_logs = true;
+            }
+        }
+        if let Some(status) = child.try_wait().map_err(error_string)? {
+            break status;
+        }
+        if start.elapsed() >= Duration::from_secs(90) {
+            child.kill().map_err(error_string)?;
+            child.wait().map_err(error_string)?;
+            thread::sleep(Duration::from_millis(50));
+            for line in received.try_iter() {
+                output.push_str(&line);
+                output.push('\n');
+            }
+            fs::write(output_dir.join("qemu.log"), &output).map_err(error_string)?;
+            return Err(format!(
+                "zeroOS: QEMU acceptance timed out after 90s; output ended with {:?}",
+                output.lines().rev().take(8).collect::<Vec<_>>()
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    for reader in readers {
+        reader
+            .join()
+            .map_err(|_| "zeroOS: QEMU reader failed".to_owned())?;
+    }
+    for line in received.try_iter() {
+        output.push_str(&line);
+        output.push('\n');
+    }
+    fs::write(output_dir.join("qemu.log"), &output).map_err(error_string)?;
     if !status.success() {
         return Err(format!("zeroOS: QEMU failed with {status}"));
     }
-    let output = fs::read_to_string(&log_path).map_err(error_string)?;
-    verify_readiness(&output)
+    verify_runtime_acceptance(&output)
+}
+
+fn qemu_reader(
+    stream: impl std::io::Read + Send + 'static,
+    lines: mpsc::Sender<String>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        for line in BufReader::new(stream).lines().map_while(Result::ok) {
+            let _ = lines.send(line);
+        }
+    })
+}
+
+fn verify_runtime_acceptance(output: &str) -> Result<(), String> {
+    verify_readiness(output)?;
+    for evidence in [
+        "\tselftest\trestart-before-dependent\tpass",
+        "\tbase\tfixture-online\tgeneration=1",
+        "\tcore\torphan-reaped\tpid=",
+        "\tflaky\tpermanent-failure\trestart-limit=3 window-seconds=10",
+        "\tselftest\tv2-rejected\tERR ZEROOS/1 UNSUPPORTED_VERSION supported=1 unchanged=true",
+        "\tselftest\tfailure-isolation\tindependent-running=true",
+        "\tselftest\tadministrative-recovery\tpass",
+        "OK ZEROOS/1 LOGS count=",
+        "SELFTEST PASS",
+        "\tcore\tshutdown-complete\tstate-synced=true",
+    ] {
+        if !output.contains(evidence) {
+            return Err(format!("zeroOS: missing QEMU evidence {evidence:?}"));
+        }
+    }
+    let shutdown = output
+        .rfind("\tcore\tshutdown-started\t")
+        .ok_or_else(|| "zeroOS: missing shutdown start".to_owned())?;
+    let tail = &output[shutdown..];
+    let mut previous = 0;
+    for service in ["independent", "dependent", "flaky", "base"] {
+        let position = tail
+            .find(&format!("\t{service}\tstop-sent\t"))
+            .ok_or_else(|| format!("zeroOS: shutdown did not stop {service}"))?;
+        if position < previous {
+            return Err("zeroOS: services did not stop in reverse dependency order".into());
+        }
+        previous = position;
+    }
+    Ok(())
 }
 
 fn firmware(arch: Arch) -> Result<(PathBuf, PathBuf), String> {
@@ -567,6 +667,7 @@ fn firmware(arch: Arch) -> Result<(PathBuf, PathBuf), String> {
         .ok_or_else(|| format!("zeroOS: {} UEFI firmware not found", arch.name()))
 }
 
+#[cfg(test)]
 fn run_with_timeout(
     command: &mut Command,
     timeout: Duration,

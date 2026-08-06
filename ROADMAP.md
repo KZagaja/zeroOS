@@ -4,18 +4,18 @@ This document is the authoritative product, architecture, and delivery specifica
 
 ## Current state
 
-Snapshot date: 2026-08-05
+Snapshot date: 2026-08-06
 
 - Architecture decisions in this document: **Accepted**.
-- Repository implementation: **M1 dual-architecture UEFI bootstrap achieved**.
-- Implementation milestones: M0–M1 **Achieved**; M2–M11 **Not started**.
+- Repository implementation: **M2 resident core runtime in progress**.
+- Implementation milestones: M0–M1 **Achieved**; M2 **In progress**; M3–M11 **Not started**.
 - A milestone may become **Achieved** only after every acceptance item passes and its dated evidence is recorded here.
 
 | Milestone | Status | Evidence |
 | --- | --- | --- |
 | M0 — Repository Foundation | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/30998375727) |
 | M1 — Dual-Architecture UEFI Bootstrap | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/31007390950) |
-| M2 — Resident Core Runtime | Not started | — |
+| M2 — Resident Core Runtime | In progress | Local implementation and verification pending native CI evidence |
 | M3 — Storage, Updates, and Recovery | Not started | — |
 | M4 — Hardware and Rust Policy Services | Not started | — |
 | M5 — Raw Wayland Compositor | Not started | — |
@@ -225,7 +225,7 @@ cargo xtask test --arch aarch64
 
 ## M2 — Resident Core Runtime
 
-**Status:** Not started  
+**Status:** In progress
 **Intent:** Turn the bootstrap PID 1 into a dependable, testable resident runtime.
 
 **Deliverables**
@@ -251,6 +251,18 @@ cargo xtask test
 
 **Dated evidence:** —  
 **Artifact hashes:** —
+
+### M2 core API and recovery contract
+
+PID 1 listens on the root-only Unix socket `/run/zeroos/core-v1.sock` (mode `0600`). A connection carries one newline-terminated request of at most 4096 bytes and then closes. Requests are `ZEROOS/1 STATUS`, `LOGS`, `START <service>`, `STOP <service>`, `RESTART <service>`, or `SHUTDOWN`; PID 1 fixture roles additionally use `ZEROOS/1 FIXTURE READY <service> <pid>` and `ZEROOS/1 FIXTURE LOG <service> <pid> <level> <event> <message>`. Responses begin with `OK ZEROOS/1` or `ERR ZEROOS/1 <code>`. Unknown major versions are rejected before dispatch and cannot change runtime state. New v1 commands and trailing `key=value` response fields are compatible additions; removing a command or changing its meaning requires a new major version and socket path.
+
+The serial `zeroos recovery>` console is a privileged administrative boundary equivalent to root socket access. It accepts only `help`, `status`, `logs`, `start`, `stop`, `restart`, `api-version`, `selftest`, and `shutdown`; it is not a POSIX shell and provides no arbitrary execution, pipes, or redirection. Per-service authorization is deferred to M4.
+
+Services start after their declared dependencies and declaration order breaks ties. Consumers stop before dependencies. Three restart attempts are allowed in a rolling ten-second window; a fourth failure is permanent, stops affected dependents, and leaves unrelated services running. Ten healthy seconds or an administrative restart clears that service's budget.
+
+Shutdown rejects new mutations, sends `SIGTERM` in reverse dependency order, applies one global two-second grace period, sends `SIGKILL` to survivors, reaps all children, calls `sync()`, records completion, and powers off.
+
+**Change log:** 2026-08-06 — M2 implementation started; acceptance remains pending native CI evidence on both architectures.
 
 ## M3 — Storage, Updates, and Recovery
 
