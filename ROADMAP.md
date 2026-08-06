@@ -7,15 +7,15 @@ This document is the authoritative product, architecture, and delivery specifica
 Snapshot date: 2026-08-06
 
 - Architecture decisions in this document: **Accepted**.
-- Repository implementation: **M2 resident core runtime in progress**.
-- Implementation milestones: M0–M1 **Achieved**; M2 **In progress**; M3–M11 **Not started**.
+- Repository implementation: **M2 resident core runtime achieved**.
+- Implementation milestones: M0–M2 **Achieved**; M3–M11 **Not started**.
 - A milestone may become **Achieved** only after every acceptance item passes and its dated evidence is recorded here.
 
 | Milestone | Status | Evidence |
 | --- | --- | --- |
 | M0 — Repository Foundation | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/30998375727) |
 | M1 — Dual-Architecture UEFI Bootstrap | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/31007390950) |
-| M2 — Resident Core Runtime | In progress | Local implementation and verification pending native CI evidence |
+| M2 — Resident Core Runtime | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/31083657653) |
 | M3 — Storage, Updates, and Recovery | Not started | — |
 | M4 — Hardware and Rust Policy Services | Not started | — |
 | M5 — Raw Wayland Compositor | Not started | — |
@@ -225,7 +225,7 @@ cargo xtask test --arch aarch64
 
 ## M2 — Resident Core Runtime
 
-**Status:** In progress
+**Status:** Achieved
 **Intent:** Turn the bootstrap PID 1 into a dependable, testable resident runtime.
 
 **Deliverables**
@@ -236,12 +236,12 @@ cargo xtask test --arch aarch64
 
 **Automated acceptance criteria**
 
-- [ ] Orphan and zombie process tests prove complete reaping.
-- [ ] Signal, service ordering, restart-limit, and dependency-failure tests pass.
-- [ ] One crashing service cannot terminate PID 1 or unrelated services.
-- [ ] Logs survive service failure and are available in the recovery console.
-- [ ] Shutdown flushes state, stops services in dependency order, and powers off.
-- [ ] API version negotiation rejects incompatible clients without destabilizing the runtime.
+- [x] Orphan and zombie process tests prove complete reaping.
+- [x] Signal, service ordering, restart-limit, and dependency-failure tests pass.
+- [x] One crashing service cannot terminate PID 1 or unrelated services.
+- [x] Logs survive service failure and are available in the recovery console.
+- [x] Shutdown flushes state, stops services in dependency order, and powers off.
+- [x] API version negotiation rejects incompatible clients without destabilizing the runtime.
 
 **Acceptance command**
 
@@ -249,8 +249,11 @@ cargo xtask test --arch aarch64
 cargo xtask test
 ```
 
-**Dated evidence:** —  
-**Artifact hashes:** —
+**Completion date:** 2026-08-06
+
+**Dated evidence:** Native `x86_64` and `aarch64` jobs passed host tests, clean architecture builds, image inspection, fixture supervision, orphan reaping, recovery-console log retrieval, incompatible API rejection, dependency-ordered shutdown, and clean QEMU poweroff for implementation commit `69b32bbff8ad892c16886c5970c150e262a39c04` in [run 31083657653](https://github.com/KZagaja/zeroOS/actions/runs/31083657653).
+
+**Artifact hashes:** `x86_64`: kernel `7b37dcb034a210604989f1fdf913298a403dc5dc34816a99d2a63dba5143cb58`, init `0b3f4c8787dae50e62daf88ec2d98d81b1ac5b798894e45d1b13900fd61384e8`, disk image `6335203879f100f46ae2b11ce0ff70320d423edab371386fa2b3b77c42775603`, build image `sha256:45ef08cd6c82174d4bae2731f7548a496a29e23706f927635a2241394fa32f2f`; `aarch64`: kernel `dbb74f5c7a315d22a7ba2169cc2c23a353520410a8646e3c22211b5d049cd36d`, init `b0f0bd4ac69af68888ba47e077f85641eb842181be86e6f7cabd01d062371625`, disk image `eaa9b930f47d184245dca45dcedd53e7933367ae777fc8b7155bec9c38b1f47a`, build image `sha256:102757b48830f71aab6c6685cce8cc4b96856606fb4c438e010b2460ae145c28`. Pinned build base: `rust:1.97.1-trixie@sha256:f1400ab14caacbb8a2c4a9730718a737499d930e9e59cc3d6890ae428b4edf0b`.
 
 ### M2 core API and recovery contract
 
@@ -263,6 +266,8 @@ Services start after their declared dependencies and declaration order breaks ti
 Shutdown rejects new mutations, sends `SIGTERM` in reverse dependency order, applies one global two-second grace period, sends `SIGKILL` to survivors, reaps all children, calls `sync()`, records completion, and powers off.
 
 **Change log:** 2026-08-06 — M2 implementation started; acceptance remains pending native CI evidence on both architectures.
+
+**Change log:** 2026-08-06 — achieved after native `x86_64` and `aarch64` host tests, clean builds, image inspection, supervision self-test, recovery-console evidence, and clean-poweroff acceptance passed in run 31083657653.
 
 ## M3 — Storage, Updates, and Recovery
 
