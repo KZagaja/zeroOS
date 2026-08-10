@@ -1434,7 +1434,12 @@ fn validate_generated_artifacts(
     config: &AiPolicy,
     violations: &mut Vec<String>,
 ) -> Result<(), String> {
+    let safe = root.canonicalize().map_err(error_string)?;
+    let safe = safe
+        .to_str()
+        .ok_or_else(|| "zeroOS: repository path is not UTF-8".to_owned())?;
     let result = Command::new("git")
+        .args(["-c", &format!("safe.directory={safe}")])
         .arg("-C")
         .arg(root)
         .args(["ls-files", "-z"])
