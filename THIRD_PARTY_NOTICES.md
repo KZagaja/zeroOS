@@ -10,6 +10,16 @@ independently licensed components retain their copyrights, licenses,
 redistribution rights, and notice/source obligations. zeroOS terms do not
 restrict rights their licenses grant.
 
+M3 additionally statically links ureq/rustls, ring, libc, zeroize, and their
+locked transitive closure. The closure is predominantly MIT, Apache-2.0, ISC,
+BSD-3-Clause, and CDLA-Permissive-2.0 licensed. M3 packages cryptsetup
+(GPL-2.0-or-later) and e2fsprogs (GPL-2.0-only), but no curl, OpenSSL CLI,
+`sha256sum`, `stty`, or system CA bundle in the runtime image. Its build image
+retains those build/test prerequisites plus sbsigntool (GPL-3.0-only) and
+efitools (GPL-2.0-only). Exact versions and acquisition details are recorded
+in `Cargo.lock`, `policy/dependencies.csv`, and
+`policy/m3-dependency-admissions.md`.
+
 M1 incorporates Linux 6.18.42 (GPL-2.0-only) and the statically linked musl C
 library (MIT) into the boot artifact. The complete corresponding Linux source
 archive is pinned in `policy/sources.lock`; embedding `/init` in Linux's

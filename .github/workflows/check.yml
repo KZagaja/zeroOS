@@ -1,4 +1,4 @@
-name: M2
+name: M3
 
 on:
   push:
@@ -29,7 +29,7 @@ jobs:
           echo "${{ matrix.arch }} build image $(docker image inspect zeroos-build --format '{{.Id}}')"
       - name: M0 regression gate
         run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask check
-      - name: M2 host acceptance
+      - name: M3 host acceptance
         run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask test
-      - name: M1 regression and M2 guest acceptance
+      - name: M0-M2 regression and M3 native acceptance
         run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask test --arch ${{ matrix.arch }}

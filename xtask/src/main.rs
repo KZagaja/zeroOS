@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     env, fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -13,7 +13,7 @@ const USAGE: &str = "usage: cargo xtask <check|test [--arch <x86_64|aarch64>]|bu
 const LINUX_VERSION: &str = "6.18.42";
 const READY: &str = "zeroOS init: READY";
 const ESP_OFFSET: u64 = 1_048_576;
-const ESP_SECTORS: &str = "126976";
+const ESP_SECTORS: &str = "32768";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Arch {
@@ -41,6 +41,13 @@ impl Arch {
         match self {
             Self::X86_64 => "x86_64-unknown-linux-musl",
             Self::Aarch64 => "aarch64-unknown-linux-musl",
+        }
+    }
+
+    fn uefi_target(self) -> &'static str {
+        match self {
+            Self::X86_64 => "x86_64-unknown-uefi",
+            Self::Aarch64 => "aarch64-unknown-uefi",
         }
     }
 
@@ -173,7 +180,7 @@ fn native_arch(value: &str) -> Option<Arch> {
 }
 
 fn artifacts(arch: Arch) -> PathBuf {
-    Path::new("target/m1").join(arch.name())
+    Path::new("target/m3").join(arch.name())
 }
 
 fn build(arch: Arch) -> Result<(), String> {
@@ -183,6 +190,7 @@ fn build(arch: Arch) -> Result<(), String> {
     let source = fetch_linux()?;
     build_init(arch, &output_dir)?;
     build_kernel(arch, &source, &output_dir)?;
+    build_selector(arch, &output_dir)?;
     package_disk(arch, &output_dir)?;
     inspect(arch, &output_dir)?;
     print_hashes(arch, &output_dir)
@@ -191,7 +199,7 @@ fn build(arch: Arch) -> Result<(), String> {
 fn fetch_linux() -> Result<PathBuf, String> {
     let (url, expected) =
         linux_source(&fs::read_to_string("policy/sources.lock").map_err(error_string)?)?;
-    let cache = Path::new("target/m1/sources");
+    let cache = Path::new("target/m3/sources");
     fs::create_dir_all(cache).map_err(error_string)?;
     let archive = cache.join(format!("linux-{LINUX_VERSION}.tar.xz"));
     if !archive.is_file() {
@@ -205,7 +213,18 @@ fn fetch_linux() -> Result<PathBuf, String> {
     }
     verify_checksum(&archive, &expected)?;
     let source = cache.join(format!("linux-{LINUX_VERSION}"));
-    if !source.join("Makefile").is_file() {
+    if !source.join("Makefile").is_file()
+        || !source.join("scripts/Kbuild.include").is_file()
+        || !source.join("usr/Kconfig").is_file()
+        || !source.join("drivers/cpuidle/Kconfig").is_file()
+    {
+        if source.exists() {
+            let quarantine = (1..100)
+                .map(|number| cache.join(format!("linux-{LINUX_VERSION}.incomplete-{number}")))
+                .find(|path| !path.exists())
+                .ok_or_else(|| "zeroOS: too many incomplete Linux source trees".to_owned())?;
+            fs::rename(&source, quarantine).map_err(error_string)?;
+        }
         let mut tar = Command::new("tar");
         tar.args(["-xf"]).arg(&archive).args(["-C"]).arg(cache);
         run(&mut tar, "extract Linux")?;
@@ -261,19 +280,105 @@ fn build_init(arch: Arch, output_dir: &Path) -> Result<(), String> {
         .join(arch.rust_target())
         .join("release/init");
     fs::copy(&built, output_dir.join("init")).map_err(error_string)?;
-    verify_static(&output_dir.join("init"))?;
-    fs::write(
-        output_dir.join("initramfs.list"),
-        format!(
-            "dir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\nnod /dev/null 0666 0 0 c 1 3\nfile /init {} 0755 0 0\n",
-            output_dir
-                .join("init")
-                .canonicalize()
-                .map_err(error_string)?
-                .display()
-        ),
+    let mut updater = Command::new("cargo");
+    updater.args([
+        "build",
+        "--release",
+        "--locked",
+        "--package",
+        "zeroos-updater",
+        "--target",
+        arch.rust_target(),
+    ]);
+    run(&mut updater, "build updater")?;
+    fs::copy(
+        Path::new("target")
+            .join(arch.rust_target())
+            .join("release/zeroos-update"),
+        output_dir.join("zeroos-update"),
     )
-    .map_err(error_string)
+    .map_err(error_string)?;
+    verify_static(&output_dir.join("init"))?;
+    verify_static(&output_dir.join("zeroos-update"))?;
+    let mut data = Command::new("cargo");
+    data.args([
+        "build",
+        "--release",
+        "--locked",
+        "--package",
+        "zeroos-data",
+        "--target",
+        arch.rust_target(),
+    ]);
+    run(&mut data, "build data tool")?;
+    fs::copy(
+        Path::new("target")
+            .join(arch.rust_target())
+            .join("release/zeroos-data"),
+        output_dir.join("zeroos-data"),
+    )
+    .map_err(error_string)?;
+    verify_static(&output_dir.join("zeroos-data"))?;
+    let mut manifest = format!(
+        "dir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\nnod /dev/null 0666 0 0 c 1 3\ndir /proc 0555 0 0\nfile /init {} 0755 0 0\nfile /zeroos-update {} 0755 0 0\nfile /zeroos-data {} 0755 0 0\n",
+        output_dir
+            .join("init")
+            .canonicalize()
+            .map_err(error_string)?
+            .display(),
+        output_dir
+            .join("zeroos-update")
+            .canonicalize()
+            .map_err(error_string)?
+            .display(),
+        output_dir
+            .join("zeroos-data")
+            .canonicalize()
+            .map_err(error_string)?
+            .display()
+    );
+    manifest.push_str(&runtime_files_manifest()?);
+    fs::write(output_dir.join("initramfs.list"), manifest).map_err(error_string)
+}
+
+fn runtime_files_manifest() -> Result<String, String> {
+    let mut files = std::collections::BTreeSet::new();
+    for program in ["cryptsetup", "mkfs.ext4", "e2fsck"] {
+        let path = ["/usr/bin", "/usr/sbin", "/bin", "/sbin"]
+            .into_iter()
+            .map(|dir| Path::new(dir).join(program))
+            .find(|path| path.is_file())
+            .ok_or_else(|| format!("zeroOS: runtime tool {program} not found"))?;
+        files.insert(path.clone());
+        for word in output_path("ldd", &[&path])?.split_whitespace() {
+            if word.starts_with('/') {
+                files.insert(PathBuf::from(word));
+            }
+        }
+    }
+    let mut directories = std::collections::BTreeSet::new();
+    for path in &files {
+        let mut parent = path.parent();
+        while let Some(dir) = parent {
+            if dir == Path::new("/") {
+                break;
+            }
+            directories.insert(dir.to_path_buf());
+            parent = dir.parent();
+        }
+    }
+    let mut manifest = String::new();
+    for directory in directories {
+        manifest.push_str(&format!("dir {} 0755 0 0\n", directory.display()));
+    }
+    for path in files {
+        manifest.push_str(&format!(
+            "file {} {} 0755 0 0\n",
+            path.display(),
+            path.display()
+        ));
+    }
+    Ok(manifest)
 }
 
 fn verify_static(path: &Path) -> Result<(), String> {
@@ -286,6 +391,28 @@ fn verify_static(path: &Path) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+fn build_selector(arch: Arch, output_dir: &Path) -> Result<(), String> {
+    let mut cargo = Command::new("cargo");
+    cargo.args([
+        "build",
+        "--release",
+        "--locked",
+        "--package",
+        "zeroos-selector",
+        "--target",
+        arch.uefi_target(),
+    ]);
+    run(&mut cargo, "build UEFI selector")?;
+    fs::copy(
+        Path::new("target")
+            .join(arch.uefi_target())
+            .join("release/zeroos-selector.efi"),
+        output_dir.join("selector.efi"),
+    )
+    .map_err(error_string)?;
+    Ok(())
 }
 
 fn build_kernel(arch: Arch, source: &Path, output_dir: &Path) -> Result<(), String> {
@@ -374,16 +501,37 @@ fn package_disk(arch: Arch, output_dir: &Path) -> Result<(), String> {
         fs::remove_file(&image).map_err(error_string)?;
     }
     let mut truncate = Command::new("truncate");
-    truncate.args(["-s", "64M"]).arg(&image);
+    truncate.args(["-s", "512M"]).arg(&image);
     run(&mut truncate, "allocate disk image")?;
 
     let mut gpt = Command::new("sgdisk");
     gpt.args([
         "--clear",
         "--disk-guid=5A45524F-4F53-4D31-8000-000000000001",
-        "--new=1:2048:129023",
+        "--new=1:2048:34815",
         "--typecode=1:EF00",
+        "--change-name=1:ZEROOS-ESP",
         "--partition-guid=1:5A45524F-4F53-4D31-8000-000000000002",
+        "--new=2:34816:231423",
+        "--typecode=2:8300",
+        "--change-name=2:ZEROOS-A",
+        "--partition-guid=2:5A45524F-4F53-4D33-8000-000000000002",
+        "--new=3:231424:428031",
+        "--typecode=3:8300",
+        "--change-name=3:ZEROOS-B",
+        "--partition-guid=3:5A45524F-4F53-4D33-8000-000000000003",
+        "--new=4:428032:624639",
+        "--typecode=4:8300",
+        "--change-name=4:ZEROOS-RECOVERY",
+        "--partition-guid=4:5A45524F-4F53-4D33-8000-000000000004",
+        "--new=5:624640:626687",
+        "--typecode=5:8300",
+        "--change-name=5:ZEROOS-STATE",
+        "--partition-guid=5:5A45524F-4F53-4D33-8000-000000000005",
+        "--new=6:626688:1048542",
+        "--typecode=6:8309",
+        "--change-name=6:ZEROOS-DATA",
+        "--partition-guid=6:5A45524F-4F53-4D33-8000-000000000006",
     ])
     .arg(&image);
     run(&mut gpt, "create GPT")?;
@@ -393,7 +541,6 @@ fn package_disk(arch: Arch, output_dir: &Path) -> Result<(), String> {
     format.env("MTOOLS_SKIP_CHECK", "1").args([
         "-i",
         &spec,
-        "-F",
         "-T",
         ESP_SECTORS,
         "-N",
@@ -408,7 +555,7 @@ fn package_disk(arch: Arch, output_dir: &Path) -> Result<(), String> {
     }
     let boot = staging.join("EFI/BOOT");
     fs::create_dir_all(&boot).map_err(error_string)?;
-    fs::copy(output_dir.join("kernel.efi"), boot.join(arch.fallback())).map_err(error_string)?;
+    fs::copy(output_dir.join("selector.efi"), boot.join(arch.fallback())).map_err(error_string)?;
     let mut touch = Command::new("touch");
     touch
         .args(["-t", "202601010000"])
@@ -422,25 +569,86 @@ fn package_disk(arch: Arch, output_dir: &Path) -> Result<(), String> {
         .args(["-m", "-s", "-i", &spec])
         .arg(staging.join("EFI"))
         .arg("::/");
-    run(&mut copy, "populate ESP")
+    run(&mut copy, "populate ESP")?;
+    for (name, seek) in [
+        ("system-a.efi", "34816"),
+        ("system-b.efi", "231424"),
+        ("recovery.efi", "428032"),
+    ] {
+        make_development_slot(arch, &output_dir.join("kernel.efi"), &output_dir.join(name))?;
+        let mut dd = Command::new("dd");
+        dd.arg(format!("if={}", output_dir.join(name).display()))
+            .arg(format!("of={}", image.display()))
+            .args([
+                "bs=512",
+                &format!("seek={seek}"),
+                "conv=notrunc",
+                "status=none",
+            ]);
+        run(&mut dd, "populate raw boot slot")?;
+    }
+    Ok(())
+}
+
+fn make_development_slot(arch: Arch, payload: &Path, output_file: &Path) -> Result<(), String> {
+    let size = fs::metadata(payload).map_err(error_string)?.len();
+    let digest = output_path("sha256sum", &[payload])?
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    let manifest = format!(
+        "version=1\narch={}\nsequence=0\npayload-size={size}\nsha256={digest}\nsigner=development-unsigned\n",
+        arch.name()
+    );
+    let mut output = fs::File::create(output_file).map_err(error_string)?;
+    output.write_all(b"ZEROSLT1").map_err(error_string)?;
+    output
+        .write_all(&(manifest.len() as u32).to_le_bytes())
+        .map_err(error_string)?;
+    output
+        .write_all(manifest.as_bytes())
+        .map_err(error_string)?;
+    output
+        .write_all(&[0; zeroos_storage::SIGNATURE_BYTES])
+        .map_err(error_string)?;
+    std::io::copy(
+        &mut fs::File::open(payload).map_err(error_string)?,
+        &mut output,
+    )
+    .map_err(error_string)?;
+    output.sync_all().map_err(error_string)
 }
 
 fn inspect(arch: Arch, output_dir: &Path) -> Result<(), String> {
     let image = output_dir.join("zeroos.img");
+    if fs::metadata(&image).map_err(error_string)?.len() != zeroos_storage::IMAGE_BYTES {
+        return Err("zeroOS: disk image is not exactly 512 MiB".into());
+    }
     let bytes = fs::read(&image).map_err(error_string)?;
     validate_signatures(&bytes)?;
     let mut verify = Command::new("sgdisk");
     verify.arg("--verify").arg(&image);
     run(&mut verify, "verify GPT")?;
-    let info = output_path("sgdisk", &[Path::new("--info=1"), &image])?;
-    if !info.contains("EFI system partition") {
-        return Err("zeroOS: partition 1 is not an EFI System Partition".into());
+    for partition in zeroos_storage::PARTITIONS {
+        let flag = format!("--info={}", partition.number);
+        let info = output_path("sgdisk", &[Path::new(&flag), &image])?;
+        if !info.contains(&format!("First sector: {}", partition.first))
+            || !info.contains(&format!("Last sector: {}", partition.last))
+            || !info.contains(&format!("Partition name: '{}'", partition.name))
+            || (partition.number == 1 && !info.contains("EFI system partition"))
+        {
+            return Err(format!(
+                "zeroOS: invalid GPT partition {}",
+                partition.number
+            ));
+        }
     }
     let esp = output_dir.join("esp.fat");
     let mut dd = Command::new("dd");
     dd.arg(format!("if={}", image.display()))
         .arg(format!("of={}", esp.display()))
-        .args(["bs=512", "skip=2048", "count=126976", "status=none"]);
+        .args(["bs=512", "skip=2048", "count=32768", "status=none"]);
     run(&mut dd, "extract ESP for inspection")?;
     let mut fat = Command::new("fsck.fat");
     fat.args(["-n"]).arg(&esp);
@@ -458,11 +666,14 @@ fn inspect(arch: Arch, output_dir: &Path) -> Result<(), String> {
         .args(["-i", &spec, &guest_path])
         .arg(&extracted);
     run(&mut copy, "extract fallback EFI file")?;
-    identical_files(&extracted, &output_dir.join("kernel.efi"))?;
+    identical_files(&extracted, &output_dir.join("selector.efi"))?;
     verify_static(&output_dir.join("init"))?;
     let manifest = fs::read_to_string(output_dir.join("initramfs.list")).map_err(error_string)?;
     if !manifest.starts_with("dir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\n")
-        || !manifest.contains("nod /dev/null 0666 0 0 c 1 3\nfile /init ")
+        || !manifest.contains("nod /dev/null 0666 0 0 c 1 3\n")
+        || !manifest.contains("file /init ")
+        || !manifest.contains("file /zeroos-update ")
+        || !manifest.contains("file /zeroos-data ")
         || !manifest.ends_with(" 0755 0 0\n")
     {
         return Err("zeroOS: invalid initramfs manifest".into());
@@ -530,21 +741,53 @@ fn run_qemu(arch: Arch, capture: bool) -> Result<(), String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = qemu.spawn().map_err(error_string)?;
-    let mut input = child.stdin.take().expect("piped QEMU stdin");
+    let mut input = child
+        .stdin
+        .take()
+        .ok_or_else(|| "zeroOS: piped QEMU stdin unavailable".to_owned())?;
     let (lines, received) = mpsc::channel();
     let readers = vec![
-        qemu_reader(child.stdout.take().unwrap(), lines.clone()),
-        qemu_reader(child.stderr.take().unwrap(), lines.clone()),
+        qemu_reader(
+            child
+                .stdout
+                .take()
+                .ok_or_else(|| "zeroOS: piped QEMU stdout unavailable".to_owned())?,
+            lines.clone(),
+        ),
+        qemu_reader(
+            child
+                .stderr
+                .take()
+                .ok_or_else(|| "zeroOS: piped QEMU stderr unavailable".to_owned())?,
+            lines.clone(),
+        ),
     ];
     drop(lines);
     let start = Instant::now();
     let mut output = String::new();
     let mut sent_selftest = false;
     let mut sent_logs = false;
+    let mut recovery_code = None;
     let status = loop {
         while let Ok(line) = received.try_recv() {
             output.push_str(&line);
             output.push('\n');
+            if line.contains("credential-request=new-passphrase")
+                || line.contains("credential-request=repeat-passphrase")
+            {
+                writeln!(input, "zeroos-test-passphrase").map_err(error_string)?;
+                input.flush().map_err(error_string)?;
+            }
+            if let Some(code) = line.strip_prefix("Recovery code (store offline): ") {
+                recovery_code = Some(code.trim().to_owned());
+            }
+            if line.contains("credential-request=repeat-recovery-code") {
+                let code = recovery_code.as_deref().ok_or_else(|| {
+                    "zeroOS: recovery code prompt preceded generated code".to_owned()
+                })?;
+                writeln!(input, "{code}").map_err(error_string)?;
+                input.flush().map_err(error_string)?;
+            }
             if line.trim_end_matches('\r') == READY && !sent_selftest {
                 writeln!(input, "selftest").map_err(error_string)?;
                 input.flush().map_err(error_string)?;
@@ -567,7 +810,8 @@ fn run_qemu(arch: Arch, capture: bool) -> Result<(), String> {
                 output.push_str(&line);
                 output.push('\n');
             }
-            fs::write(output_dir.join("qemu.log"), &output).map_err(error_string)?;
+            fs::write(output_dir.join("qemu.log"), redact_recovery_codes(&output))
+                .map_err(error_string)?;
             return Err(format!(
                 "zeroOS: QEMU acceptance timed out after 90s; output ended with {:?}",
                 output.lines().rev().take(8).collect::<Vec<_>>()
@@ -584,11 +828,25 @@ fn run_qemu(arch: Arch, capture: bool) -> Result<(), String> {
         output.push_str(&line);
         output.push('\n');
     }
-    fs::write(output_dir.join("qemu.log"), &output).map_err(error_string)?;
+    fs::write(output_dir.join("qemu.log"), redact_recovery_codes(&output)).map_err(error_string)?;
     if !status.success() {
         return Err(format!("zeroOS: QEMU failed with {status}"));
     }
     verify_runtime_acceptance(&output)
+}
+
+fn redact_recovery_codes(output: &str) -> String {
+    output
+        .lines()
+        .map(|line| {
+            if line.contains("Recovery code (store offline): ") {
+                "Recovery code (store offline): [REDACTED]"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn qemu_reader(
@@ -702,7 +960,15 @@ fn verify_readiness(output: &str) -> Result<(), String> {
 }
 
 fn print_hashes(arch: Arch, output_dir: &Path) -> Result<(), String> {
-    for name in ["kernel.efi", "init", "zeroos.img"] {
+    for name in [
+        "selector.efi",
+        "system-a.efi",
+        "system-b.efi",
+        "recovery.efi",
+        "init",
+        "zeroos-update",
+        "zeroos.img",
+    ] {
         println!(
             "zeroOS {} {name}: {}",
             arch.name(),
@@ -843,6 +1109,8 @@ fn build_into(target: &Path) -> Result<(), String> {
 }
 
 fn validate_repository(root: &Path) -> Result<(), String> {
+    validate_ai_policy(root)?;
+    validate_build_inputs(root)?;
     validate_manifest(&fs::read_to_string(root.join("Cargo.toml")).map_err(error_string)?)?;
     let ledger = fs::read_to_string(root.join("policy/dependencies.csv")).map_err(error_string)?;
     let admitted = validate_ledger(&ledger)?;
@@ -853,9 +1121,351 @@ fn validate_repository(root: &Path) -> Result<(), String> {
     linux_source(&sources).map(|_| ())
 }
 
+fn validate_build_inputs(root: &Path) -> Result<(), String> {
+    let docker = fs::read_to_string(root.join("Dockerfile")).map_err(error_string)?;
+    let image = fs::read_to_string(root.join("policy/build-image.lock")).map_err(error_string)?;
+    let expected_from = format!("FROM {}", image.trim());
+    if docker.lines().next() != Some(expected_from.as_str())
+        || !docker.lines().any(|line| {
+            line.strip_prefix("ARG DEBIAN_SNAPSHOT=")
+                .is_some_and(|value| {
+                    value.len() == 16
+                        && value.ends_with('Z')
+                        && value.as_bytes().get(8) == Some(&b'T')
+                        && value[..8].bytes().all(|byte| byte.is_ascii_digit())
+                        && value[9..15].bytes().all(|byte| byte.is_ascii_digit())
+                })
+        })
+        || !docker.contains("cargo install --locked cargo-deny --version 0.19.4")
+    {
+        return Err(
+            "zeroOS: Docker build inputs must pin image digest, Debian snapshot, and cargo-deny"
+                .into(),
+        );
+    }
+    for workflow in [
+        ".github/workflows/check.yml",
+        ".github/workflows/release.yml",
+    ] {
+        let input = fs::read_to_string(root.join(workflow)).map_err(error_string)?;
+        for (index, line) in input.lines().enumerate() {
+            let Some(action) = line.trim().strip_prefix("- uses: ") else {
+                continue;
+            };
+            let Some((_, revision)) = action.split_once('@') else {
+                return Err(format!("zeroOS: {workflow}:{} unpinned action", index + 1));
+            };
+            let revision = revision.split_whitespace().next().unwrap_or_default();
+            if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(format!(
+                    "zeroOS: {workflow}:{} action must use a 40-hex commit pin",
+                    index + 1
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct AiPolicy {
+    rust_roots: Vec<String>,
+    architecture_roots: HashSet<String>,
+    excluded_directories: HashSet<String>,
+    generated_extensions: Vec<String>,
+}
+
+fn validate_ai_policy(root: &Path) -> Result<(), String> {
+    let config = parse_ai_policy(
+        &fs::read_to_string(root.join("policy/ai-policy.conf"))
+            .map_err(|error| format!("zeroOS: cannot read policy/ai-policy.conf: {error}"))?,
+    )?;
+    let mut rust_files = Vec::new();
+    for path in &config.rust_roots {
+        let directory = root.join(path);
+        if !directory.is_dir() {
+            return Err(format!("zeroOS: policy rust root does not exist: {path}"));
+        }
+        collect_rust_files(&directory, &config.excluded_directories, &mut rust_files)?;
+    }
+    let mut violations = Vec::new();
+    for path in rust_files {
+        scan_rust(root, &path, &config, &mut violations)?;
+    }
+    validate_generated_artifacts(root, &config, &mut violations)?;
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "zeroOS: AI policy violations:\n{}",
+            violations.join("\n")
+        ))
+    }
+}
+
+fn parse_ai_policy(input: &str) -> Result<AiPolicy, String> {
+    let mut values = BTreeMap::new();
+    for (index, line) in input.lines().enumerate() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (key, value) = line.split_once('=').ok_or_else(|| {
+            format!(
+                "zeroOS: invalid AI policy line {}: expected key=value",
+                index + 1
+            )
+        })?;
+        if key.is_empty() || value.is_empty() || values.insert(key, value).is_some() {
+            return Err(format!("zeroOS: invalid AI policy line {}", index + 1));
+        }
+    }
+    let expected = [
+        "architecture-roots",
+        "excluded-directories",
+        "generated-extensions",
+        "rust-roots",
+        "version",
+    ];
+    if values.keys().copied().collect::<Vec<_>>() != expected {
+        return Err("zeroOS: AI policy has missing or unknown keys".into());
+    }
+    if values["version"] != "1" {
+        return Err("zeroOS: unsupported AI policy version".into());
+    }
+    let list = |key: &str| -> Result<Vec<String>, String> {
+        let fields: Vec<_> = values[key].split(',').map(str::to_owned).collect();
+        if fields.iter().any(|field| {
+            field.is_empty()
+                || field.starts_with('/')
+                || field.contains("..")
+                || field.contains(char::is_whitespace)
+        }) {
+            return Err(format!("zeroOS: invalid AI policy value for {key}"));
+        }
+        Ok(fields)
+    };
+    let rust_roots = list("rust-roots")?;
+    let architecture_roots: HashSet<String> = list("architecture-roots")?.into_iter().collect();
+    if !architecture_roots
+        .iter()
+        .all(|path| rust_roots.contains(path))
+    {
+        return Err("zeroOS: architecture roots must be Rust roots".into());
+    }
+    Ok(AiPolicy {
+        rust_roots,
+        architecture_roots,
+        excluded_directories: list("excluded-directories")?.into_iter().collect(),
+        generated_extensions: list("generated-extensions")?,
+    })
+}
+
+fn collect_rust_files(
+    directory: &Path,
+    excluded: &HashSet<String>,
+    output: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    for entry in fs::read_dir(directory).map_err(error_string)? {
+        let entry = entry.map_err(error_string)?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if path.is_dir() {
+            if !excluded.contains(name.as_ref()) {
+                collect_rust_files(&path, excluded, output)?;
+            }
+        } else if path.extension().and_then(|value| value.to_str()) == Some("rs") {
+            output.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn scan_rust(
+    root: &Path,
+    path: &Path,
+    config: &AiPolicy,
+    violations: &mut Vec<String>,
+) -> Result<(), String> {
+    let source = fs::read_to_string(path).map_err(error_string)?;
+    let code = rust_code_only(&source)?;
+    let relative = path.strip_prefix(root).map_err(error_string)?;
+    let root_name = relative
+        .components()
+        .next()
+        .and_then(|part| part.as_os_str().to_str())
+        .ok_or_else(|| format!("zeroOS: invalid policy path {}", relative.display()))?;
+    let rules = [
+        (
+            ".unwrap()",
+            "RUST_NO_UNWRAP",
+            "propagate with ? or match explicitly",
+        ),
+        (
+            ".expect(",
+            "RUST_NO_EXPECT",
+            "propagate with ? or match explicitly",
+        ),
+        (
+            "todo!(",
+            "RUST_NO_TODO",
+            "implement the required behavior or report a blocker",
+        ),
+        (
+            "unimplemented!(",
+            "RUST_NO_UNIMPLEMENTED",
+            "implement the required behavior or report a blocker",
+        ),
+        ("panic!(", "RUST_NO_PANIC", "return a structured error"),
+        (
+            "unreachable!(",
+            "RUST_NO_UNREACHABLE",
+            "handle the state explicitly",
+        ),
+        (
+            "unreachable_unchecked",
+            "UNSAFE_UNREACHABLE",
+            "remove the unchecked unreachable assumption",
+        ),
+        (
+            "static mut",
+            "UNSAFE_STATIC_MUT",
+            "use owned state, a lock, or an atomic",
+        ),
+    ];
+    let original_lines: Vec<_> = source.lines().collect();
+    for (index, line) in code.lines().enumerate() {
+        for (needle, rule, remediation) in rules {
+            if line.contains(needle) {
+                violations.push(policy_diagnostic(relative, index + 1, rule, remediation));
+            }
+        }
+        if line.contains("unsafe {") || line.contains("unsafe{") {
+            let documented = original_lines[..index]
+                .iter()
+                .rev()
+                .take_while(|line| line.trim_start().starts_with("//"))
+                .any(|line| line.trim_start().starts_with("// SAFETY:"));
+            if !documented {
+                violations.push(policy_diagnostic(
+                    relative,
+                    index + 1,
+                    "UNSAFE_DOCUMENTATION",
+                    "add an immediately preceding falsifiable SAFETY comment",
+                ));
+            }
+        }
+        if line.contains("target_arch") && !config.architecture_roots.contains(root_name) {
+            violations.push(policy_diagnostic(
+                relative,
+                index + 1,
+                "ARCHITECTURE_BOUNDARY",
+                "move target-specific code to selector/ or expose a typed capability",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn policy_diagnostic(path: &Path, line: usize, rule: &str, remediation: &str) -> String {
+    format!("{}:{line}: {rule}: {remediation}", path.display())
+}
+
+fn rust_code_only(source: &str) -> Result<String, String> {
+    let bytes = source.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    let mut block_depth = 0usize;
+    let mut string = false;
+    let mut escaped = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if block_depth > 0 {
+            if bytes.get(index..index + 2) == Some(b"/*") {
+                block_depth += 1;
+                output.extend_from_slice(b"  ");
+                index += 2;
+            } else if bytes.get(index..index + 2) == Some(b"*/") {
+                block_depth -= 1;
+                output.extend_from_slice(b"  ");
+                index += 2;
+            } else {
+                output.push(if byte == b'\n' { b'\n' } else { b' ' });
+                index += 1;
+            }
+        } else if string {
+            output.push(if byte == b'\n' { b'\n' } else { b' ' });
+            index += 1;
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                string = false;
+            }
+        } else if bytes.get(index..index + 2) == Some(b"//") {
+            while index < bytes.len() && bytes[index] != b'\n' {
+                output.push(b' ');
+                index += 1;
+            }
+        } else if bytes.get(index..index + 2) == Some(b"/*") {
+            block_depth = 1;
+            output.extend_from_slice(b"  ");
+            index += 2;
+        } else if byte == b'"'
+            && !(index > 0 && bytes[index - 1] == b'\'' && bytes.get(index + 1) == Some(&b'\''))
+        {
+            string = true;
+            output.push(b' ');
+            index += 1;
+        } else {
+            output.push(byte);
+            index += 1;
+        }
+    }
+    if block_depth != 0 || string {
+        return Err("zeroOS: policy scanner could not parse Rust comments/strings".into());
+    }
+    String::from_utf8(output).map_err(error_string)
+}
+
+fn validate_generated_artifacts(
+    root: &Path,
+    config: &AiPolicy,
+    violations: &mut Vec<String>,
+) -> Result<(), String> {
+    let result = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "-z"])
+        .output()
+        .map_err(error_string)?;
+    if !result.status.success() {
+        return Err("zeroOS: git ls-files failed during generated-artifact policy".into());
+    }
+    for bytes in result
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+    {
+        let path = String::from_utf8(bytes.to_vec()).map_err(error_string)?;
+        let generated = path.split('/').any(|part| part == "target")
+            || config
+                .generated_extensions
+                .iter()
+                .any(|extension| path.ends_with(extension));
+        if generated {
+            violations.push(format!(
+                "{path}:1: GENERATED_ARTIFACT: remove generated build/image/source output from Git"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_manifest(manifest: &str) -> Result<(), String> {
     for required in [
-        "members = [\"xtask\", \"init\"]",
+        "members = [\"xtask\", \"init\", \"storage\", \"updater\", \"data\", \"selector\"]",
         "edition = \"2024\"",
         "license = \"LicenseRef-zeroOS-Proprietary\"",
         "publish = false",
@@ -869,7 +1479,7 @@ fn validate_manifest(manifest: &str) -> Result<(), String> {
 }
 
 fn validate_ledger(input: &str) -> Result<HashSet<(String, String)>, String> {
-    let header = "package,version,need,owner,maintenance,license,architectures,attack_surface,classification";
+    let header = "package,version,need,alternatives,owner,maintenance,vulnerability_response,license,architectures,version_pin,acquisition,transitives,update_path,attack_surface,base_image,classification,replacement_trigger";
     let mut lines = input.lines();
     if lines.next() != Some(header) {
         return Err("zeroOS: invalid dependency ledger header".into());
@@ -877,9 +1487,12 @@ fn validate_ledger(input: &str) -> Result<HashSet<(String, String)>, String> {
     let mut admitted = HashSet::new();
     for (index, line) in lines.filter(|line| !line.is_empty()).enumerate() {
         let fields: Vec<_> = line.split(',').collect();
-        if fields.len() != 9
+        if fields.len() != 17
             || fields.iter().any(|field| field.trim().is_empty())
-            || !matches!(fields[8], "Retain" | "Replace")
+            || !matches!(fields[14], "yes" | "no")
+            || !matches!(fields[15], "Retain" | "Replace")
+            || (fields[15] == "Replace" && fields[16] == "n/a")
+            || (fields[15] == "Retain" && fields[16] != "n/a")
         {
             return Err(format!(
                 "zeroOS: invalid dependency ledger row {}",
@@ -1014,14 +1627,64 @@ mod tests {
     }
 
     #[test]
-    fn rejects_different_build_outputs() {
+    fn rejects_different_build_outputs() -> Result<(), Box<dyn std::error::Error>> {
         let root = env::temp_dir().join(format!("zeroos-test-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&root)?;
         let first = root.join("first");
         let second = root.join("second");
-        fs::write(&first, b"first").unwrap();
-        fs::write(&second, b"second").unwrap();
+        fs::write(&first, b"first")?;
+        fs::write(&second, b"second")?;
         assert!(identical_files(&first, &second).is_err());
-        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn policy_rejects_temporary_source_unsafe_and_dependency_violations()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = env::temp_dir().join(format!("zeroos-policy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("owned"))?;
+        let source = root.join("owned/source.rs");
+        let config = AiPolicy {
+            rust_roots: vec!["owned".into()],
+            architecture_roots: HashSet::new(),
+            excluded_directories: HashSet::new(),
+            generated_extensions: vec![".img".into()],
+        };
+        fs::write(&source, "fn compliant() -> Result<(), ()> { Ok(()) }\n")?;
+        let mut violations = Vec::new();
+        scan_rust(&root, &source, &config, &mut violations)?;
+        assert!(violations.is_empty());
+
+        fs::write(&source, "fn bad(value: Option<u8>) { value.unwrap(); }\n")?;
+        scan_rust(&root, &source, &config, &mut violations)?;
+        assert!(
+            violations
+                .iter()
+                .any(|item| item.contains("RUST_NO_UNWRAP"))
+        );
+
+        violations.clear();
+        fs::write(
+            &source,
+            "fn bad() { unsafe { core::ptr::read(1 as *const u8); } }\n",
+        )?;
+        scan_rust(&root, &source, &config, &mut violations)?;
+        assert!(
+            violations
+                .iter()
+                .any(|item| item.contains("UNSAFE_DOCUMENTATION"))
+        );
+
+        let lock = root.join("Cargo.lock");
+        fs::write(
+            &lock,
+            "[[package]]\nname = \"unadmitted\"\nversion = \"1.0.0\"\nsource = \"registry+x\"\n",
+        )?;
+        assert!(validate_cargo_lock(&fs::read_to_string(lock)?, &HashSet::new()).is_err());
+        assert!(parse_ai_policy("version=1\nunknown=value\n").is_err());
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 }

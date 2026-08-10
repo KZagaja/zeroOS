@@ -6,3 +6,8 @@ license.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+zeroos-storage = { path = "../storage", version = "=0.0.0" }
+
+[lints]
+workspace = true

@@ -1,0 +1,145 @@
+name: M3 production release
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Manually approved release stage
+        required: true
+        type: choice
+        options:
+          - draft-recovery
+          - production
+      source_sha:
+        description: Exact private source commit
+        required: true
+      sequence:
+        description: Monotonic release sequence (production only)
+        required: false
+      recovery_x86_64_sha256:
+        description: Returned offline-signed x86_64 recovery SHA-256
+        required: false
+      recovery_aarch64_sha256:
+        description: Returned offline-signed aarch64 recovery SHA-256
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-build:
+    if: inputs.stage == 'draft-recovery'
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    environment: offline-recovery-draft
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
+      - run: docker build --pull=false --tag zeroos-build .
+      - run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask test --arch ${{ matrix.arch }}
+      - name: Prepare unsigned recovery payload
+        run: |
+          cp "target/m3/${{ matrix.arch }}/kernel.efi" "zeroos-recovery-${{ matrix.arch }}-unsigned.efi"
+          sha256sum "zeroos-recovery-${{ matrix.arch }}-unsigned.efi" > "zeroos-recovery-${{ matrix.arch }}-unsigned.efi.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: recovery-${{ matrix.arch }}
+          path: zeroos-recovery-${{ matrix.arch }}-unsigned.efi*
+
+  recovery-draft:
+    if: inputs.stage == 'draft-recovery'
+    needs: recovery-build
+    runs-on: ubuntu-24.04
+    environment: offline-recovery-draft
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: recovery-*
+          merge-multiple: true
+      - name: Publish draft for offline signing
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
+        run: |
+          gh release create "recovery-${{ inputs.source_sha }}" --draft zeroos-recovery-*-unsigned.efi* --repo KZagaja/zeroOS-releases --title "Unsigned recovery ${{ inputs.source_sha }}" --notes "Offline signing input built from source ${{ inputs.source_sha }}"
+
+  production-build:
+    if: inputs.stage == 'production'
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            recovery_hash_input: recovery_x86_64_sha256
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            recovery_hash_input: recovery_aarch64_sha256
+    runs-on: ${{ matrix.runner }}
+    environment: production-release
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
+      - name: Validate production inputs
+        env:
+          SEQUENCE: ${{ inputs.sequence }}
+          RECOVERY_SHA256: ${{ inputs[matrix.recovery_hash_input] }}
+        run: |
+          test -n "$SEQUENCE"
+          test -n "$RECOVERY_SHA256"
+          case "$SEQUENCE" in *[!0-9]*|'') exit 1;; esac
+          case "$RECOVERY_SHA256" in *[!0-9a-f]*|'') exit 1;; esac
+          test "${#RECOVERY_SHA256}" -eq 64
+      - run: docker build --pull=false --tag zeroos-build .
+      - run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask test --arch ${{ matrix.arch }}
+      - name: Fetch and verify offline-signed recovery
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
+          RECOVERY_SHA256: ${{ inputs[matrix.recovery_hash_input] }}
+        run: |
+          gh release download "recovery-${{ inputs.source_sha }}" --repo KZagaja/zeroOS-releases --pattern "zeroos-recovery-${{ matrix.arch }}.efi"
+          test "$(sha256sum "zeroos-recovery-${{ matrix.arch }}.efi" | cut -d' ' -f1)" = "$RECOVERY_SHA256"
+          zeroos-sign verify-recovery --arch "${{ matrix.arch }}" --payload "zeroos-recovery-${{ matrix.arch }}.efi"
+      - name: Sign through protected non-exporting signer
+        run: |
+          zeroos-sign sign-efi --role selector --input "target/m3/${{ matrix.arch }}/selector.efi" --output "zeroos-selector-${{ matrix.arch }}.efi"
+          zeroos-sign sign-efi --role production --input "target/m3/${{ matrix.arch }}/kernel.efi" --output "zeroos-system-${{ matrix.arch }}.efi"
+          zeroos-sign package --arch "${{ matrix.arch }}" --sequence "${{ inputs.sequence }}" --payload "zeroos-system-${{ matrix.arch }}.efi" --output "zeroos-${{ matrix.arch }}.slot"
+          sha256sum zeroos-${{ matrix.arch }}.slot zeroos-selector-${{ matrix.arch }}.efi zeroos-system-${{ matrix.arch }}.efi zeroos-recovery-${{ matrix.arch }}.efi > zeroos-${{ matrix.arch }}.sha256
+          zeroos-sign provenance --source "${{ inputs.source_sha }}" --arch "${{ matrix.arch }}" --sequence "${{ inputs.sequence }}" --hashes "zeroos-${{ matrix.arch }}.sha256" --output "zeroos-${{ matrix.arch }}.provenance.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zeroos-${{ matrix.arch }}
+          path: |
+            zeroos-${{ matrix.arch }}.slot
+            zeroos-${{ matrix.arch }}.sha256
+            zeroos-${{ matrix.arch }}.provenance.json
+            zeroos-selector-${{ matrix.arch }}.efi
+            zeroos-system-${{ matrix.arch }}.efi
+            zeroos-recovery-${{ matrix.arch }}.efi
+
+  publish:
+    if: inputs.stage == 'production'
+    needs: production-build
+    runs-on: ubuntu-24.04
+    environment: production-release
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: zeroos-*
+          merge-multiple: true
+      - name: Publish fixed-name assets to public artifact repository
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
+        run: |
+          gh release create "sequence-${{ inputs.sequence }}" zeroos-*.slot zeroos-*.sha256 zeroos-*.provenance.json zeroos-selector-*.efi zeroos-system-*.efi zeroos-recovery-*.efi --repo KZagaja/zeroOS-releases --title "zeroOS sequence ${{ inputs.sequence }}" --notes "Source ${{ inputs.source_sha }}"

@@ -8,7 +8,7 @@ Snapshot date: 2026-08-06
 
 - Architecture decisions in this document: **Accepted**.
 - Repository implementation: **M2 resident core runtime achieved**.
-- Implementation milestones: M0–M2 **Achieved**; M3–M11 **Not started**.
+- Implementation milestones: M0–M2 **Achieved**; M3 **In progress**; M4–M11 **Not started**.
 - A milestone may become **Achieved** only after every acceptance item passes and its dated evidence is recorded here.
 
 | Milestone | Status | Evidence |
@@ -16,7 +16,7 @@ Snapshot date: 2026-08-06
 | M0 — Repository Foundation | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/30998375727) |
 | M1 — Dual-Architecture UEFI Bootstrap | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/31007390950) |
 | M2 — Resident Core Runtime | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/31083657653) |
-| M3 — Storage, Updates, and Recovery | Not started | — |
+| M3 — Storage, Updates, and Recovery | In progress | Human promotion gates pending |
 | M4 — Hardware and Rust Policy Services | Not started | — |
 | M5 — Raw Wayland Compositor | Not started | — |
 | M6 — zeroOS UI Toolkit | Not started | — |
@@ -271,7 +271,7 @@ Shutdown rejects new mutations, sends `SIGTERM` in reverse dependency order, app
 
 ## M3 — Storage, Updates, and Recovery
 
-**Status:** Not started  
+**Status:** In progress
 **Intent:** Make system changes transactional and recoverable before user data depends on the platform.
 
 **Deliverables**
@@ -299,6 +299,28 @@ cargo xtask test --arch aarch64
 
 **Dated evidence:** —  
 **Artifact hashes:** —
+
+### M3 storage and update contract
+
+The disk is exactly 512 MiB with deterministic GPT identities: a 16 MiB `ZEROOS-ESP`, 96 MiB each for `ZEROOS-A`, `ZEROOS-B`, and `ZEROOS-RECOVERY`, a 1 MiB `ZEROOS-STATE`, and the remaining aligned space as `ZEROOS-DATA`. The ESP contains only `EFI/BOOT/BOOTX64.EFI` or `BOOTAA64.EFI`. System and recovery partitions contain raw signed EFI payloads; data is LUKS2/ext4 and is never part of an update.
+
+Boot state uses two alternating 4096-byte `ZEROOSB1` records at offsets 0 and 4096. Each record has little-endian generation and release sequence numbers, confirmed/pending/booting slot bytes, a failure bitmap, a recovery-request byte, zero padding, and CRC32 in its final four bytes. The valid record with the greatest generation wins. A write targets `generation % 2`, writes one complete record, then flushes. A pending slot is a one-boot trial; reboot before confirmation marks only that trial failed and returns to the confirmed slot. PID 1 may confirm after encrypted data is mounted and required services have remained healthy for ten seconds. Explicit load failure of both normal slots selects recovery.
+
+A `.slot` starts with `ZEROSLT1`, a little-endian 32-bit manifest length, the manifest, a 384-byte RSA-3072-PSS/SHA-256 signature over the exact manifest bytes, and the signed EFI payload. The newline-delimited v1 manifest has exactly one each of `version`, `arch`, `sequence`, `payload-size`, `sha256`, and `signer`; unknown, duplicate, missing, oversized, malformed, wrong-architecture, non-increasing, or corrupt values are rejected before activation. The fixed public assets are `zeroos-x86_64.slot` and `zeroos-aarch64.slot` in `KZagaja/zeroOS-releases`.
+
+`ZEROOS/1 UPDATE CHECK`, `UPDATE INSTALL`, and `RECOVERY` are compatible v1 additions. Status appends `mode`, `slot`, `confirmed`, `pending`, `sequence`, `update`, and `data`. The recovery console remains an allowlist and adds `update check`, `update install`, `reboot recovery`, `repair-boot`, `repair-data`, and recovery-only `factory-reset`; none interpret shell syntax.
+
+Data provisioning uses LUKS2 AES-XTS-plain64 with a 512-bit key and Argon2id, two user-held keyslots, then ext4 mounted at `/var/lib/zeroos`. Normal boot accepts the passphrase; recovery accepts either credential. Factory reset exists only in recovery, requires literal `ERASE-USER-DATA`, confirmed new credentials, recreates only data, and clears update/trial state. System slots, recovery, firmware variables, PK, KEK, and db are preserved.
+
+### M3 key and promotion gates
+
+PK and KEK are offline; the recovery signer is separate and offline; the RSA-3072 production release signer is exposed only through a manually approved protected GitHub Environment signing interface. Private keys must never enter Git, artifacts, command arguments, environment variables, or logs. Custodians record SHA-256 fingerprints, two geographically separate encrypted backups, a witnessed recovery test, and an emergency KEK-authorized db removal/dbx procedure offline.
+
+Rotation overlaps trust: add the next db certificate under KEK, publish an old-key transition release that trusts both, switch the protected signer, then remove or revoke the old certificate under KEK. QEMU uses disposable non-production keys to exercise addition, transition, rejection, and revocation.
+
+The empty public artifact-only repository is [KZagaja/zeroOS-releases](https://github.com/KZagaja/zeroOS-releases); the source repository remains private. Achievement remains gated on the offline ceremony, protected-environment provisioning, a production-signed install from the implementation SHA, independent security review evidence, and passing native CI on the exact evidence commit. No achievement evidence or `m3-achieved` tag may be created before those human gates are real.
+
+**Change log:** 2026-08-06 — M3 implementation started; production key ceremony, protected signing, public release publication, independent review, and exact-commit native acceptance evidence remain pending.
 
 ## M4 — Hardware and Rust Policy Services
 

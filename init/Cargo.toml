@@ -9,3 +9,10 @@ rust-version.workspace = true
 [[bin]]
 name = "init"
 path = "src/main.rs"
+
+[dependencies]
+libc.workspace = true
+zeroos-storage = { path = "../storage", version = "=0.0.0" }
+
+[lints]
+workspace = true

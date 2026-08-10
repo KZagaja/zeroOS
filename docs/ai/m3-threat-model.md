@@ -1,0 +1,9 @@
+# Threat model: M3 storage, update, and recovery
+
+- Assets: bootability, confirmed slot, release sequence, system/recovery integrity, user data, credentials, trust keys, firmware variables, and evidence integrity.
+- Actors: root API clients, local console operator, update/release server, compromised network peer, malformed disk state, external cryptsetup/e2fs tools, firmware, CI, protected signer, and offline custodians.
+- Entry points: core v1 socket, recovery grammar, HTTPS redirects/headers/body, slot manifest/signature/payload, GPT/sysfs/device nodes, boot journal, terminal input, child progress/status, release workflow inputs/artifacts.
+- Privilege transitions: PID 1 owns state and children; updater may write only the validated inactive raw slot; data tool may mutate only the validated data partition; selector crosses UEFI protocols; protected/offline signers remain outside device runtime.
+- Abuse controls: exact grammar/version/size limits; root-only socket; fixed HTTPS origins and static roots; certificate/time validation; strong ETag resume; exact signed bytes; signer allowlist; monotonic sequence; checked sizes; exact partition identity; RAII cleanup; mlock/zeroize; secret-safe bounded logs; explicit destructive confirmation; fail-closed child/journal behavior.
+- Persistence and recovery: alternating flushed journal records; durable resume metadata; raw-slot flush and reread; unconfirmed trial rollback; independently selected recovery; repair reconstructs redundancy; reset preserves all non-data partitions and Secure Boot state.
+- Residual gates: production key custody and revocation rehearsal, protected signer/token, independent security review, production-signed installation, native exact-SHA CI, and physical-device certification remain external evidence requirements.
