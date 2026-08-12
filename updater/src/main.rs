@@ -1,4 +1,6 @@
 use ring::{digest, signature};
+#[cfg(feature = "acceptance")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     env, fs,
     io::{Read, Seek, SeekFrom, Write},
@@ -8,14 +10,17 @@ use std::{
 };
 use ureq::{Agent, http::StatusCode};
 use zeroos_storage::{
-    MAX_MANIFEST, MAX_PAYLOAD, Manifest, RELEASE_URL, SIGNATURE_BYTES, SLOT_BYTES,
+    MAX_MANIFEST, MAX_PAYLOAD, Manifest, RELEASE_URL, SIGNATURE_BYTES, container_manifest_size,
 };
 
-const MAGIC: &[u8; 8] = b"ZEROSLT1";
 const BUILD_EPOCH: u64 = 1_785_888_000;
 const MAX_CONTAINER: u64 = 12 + MAX_MANIFEST as u64 + SIGNATURE_BYTES as u64 + MAX_PAYLOAD;
 const MAX_REDIRECTS: usize = 5;
 const METADATA_LIMIT: u64 = 2048;
+#[cfg(feature = "acceptance")]
+static DOWNLOAD_CUT_READY: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "acceptance")]
+static SLOT_WRITE_CUT_READY: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DownloadMetadata {
@@ -61,15 +66,23 @@ fn run() -> Result<(), String> {
     fs::create_dir_all(&work).map_err(redact)?;
     let download = work.join(format!("zeroos-{arch}.slot.part"));
     let metadata = work.join(format!("zeroos-{arch}.resume"));
+    #[cfg(feature = "acceptance")]
+    accept("before-download");
     println!("ZEROOS_UPDATE phase=download");
     download_asset(&url, &download, &metadata, arch)?;
+    #[cfg(feature = "acceptance")]
+    accept("after-download-persist");
 
     let current_sequence = env::var("ZEROOS_SEQUENCE")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
     println!("ZEROOS_UPDATE phase=verify");
+    #[cfg(feature = "acceptance")]
+    accept("before-signature-verification");
     let manifest = verify_container(&download, arch, current_sequence, true)?;
+    #[cfg(feature = "acceptance")]
+    accept("after-signature-verification");
     if check_only {
         println!(
             "ZEROOS_UPDATE phase=complete state=available sequence={}",
@@ -82,9 +95,15 @@ fn run() -> Result<(), String> {
         .map(PathBuf::from)
         .ok_or("missing-inactive-slot")?;
     validate_inactive_target(&inactive, arch)?;
+    #[cfg(feature = "acceptance")]
+    accept("before-slot-write");
     println!("ZEROOS_UPDATE phase=slot-write");
     write_slot(&download, &inactive)?;
+    #[cfg(feature = "acceptance")]
+    accept("after-slot-flush");
     println!("ZEROOS_UPDATE phase=reread");
+    #[cfg(feature = "acceptance")]
+    accept("before-reread");
     let reread = verify_container(&inactive, arch, current_sequence, false)?;
     if reread != manifest {
         return Err("slot-reread-mismatch".into());
@@ -95,6 +114,21 @@ fn run() -> Result<(), String> {
         inactive.display()
     );
     Ok(())
+}
+
+#[cfg(feature = "acceptance")]
+fn accept(phase: &str) {
+    if let Ok(mut console) = fs::OpenOptions::new().write(true).open("/dev/console") {
+        let _ = writeln!(console, "ZEROOS_ACCEPT phase={phase}");
+    }
+    let first_repeated = match phase {
+        "during-download-persist" => !DOWNLOAD_CUT_READY.swap(true, Ordering::Relaxed),
+        "during-slot-write" => !SLOT_WRITE_CUT_READY.swap(true, Ordering::Relaxed),
+        _ => true,
+    };
+    if first_repeated {
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 fn release_url(arch: &str) -> String {
@@ -252,6 +286,8 @@ fn persist_body(
         }
         destination.write_all(&buffer[..count]).map_err(redact)?;
         destination.sync_all().map_err(redact)?;
+        #[cfg(feature = "acceptance")]
+        accept("during-download-persist");
         metadata.written = metadata
             .written
             .checked_add(u64::try_from(count).map_err(|_| "bad-content-length")?)
@@ -416,13 +452,7 @@ fn verify_container_with_keys(
     let mut file = fs::File::open(path).map_err(redact)?;
     let mut header = [0; 12];
     file.read_exact(&mut header).map_err(redact)?;
-    if &header[..8] != MAGIC {
-        return Err("bad-container-magic".into());
-    }
-    let manifest_size = u32::from_le_bytes([header[8], header[9], header[10], header[11]]) as usize;
-    if manifest_size == 0 || manifest_size > MAX_MANIFEST {
-        return Err("bad-manifest-size".into());
-    }
+    let manifest_size = container_manifest_size(&header).map_err(str::to_owned)?;
     let mut manifest_bytes = vec![0; manifest_size];
     file.read_exact(&mut manifest_bytes).map_err(redact)?;
     let manifest = Manifest::parse(&manifest_bytes, arch).map_err(str::to_owned)?;
@@ -436,8 +466,7 @@ fn verify_container_with_keys(
         .and_then(|value| value.checked_add(SIGNATURE_BYTES as u64))
         .and_then(|value| value.checked_add(manifest.payload_size))
         .ok_or("bad-container-size")?;
-    let actual_size = file.metadata().map_err(redact)?.len();
-    if (exact_size && actual_size != expected) || (!exact_size && actual_size < expected) {
+    if exact_size && file.metadata().map_err(redact)?.len() != expected {
         return Err("bad-container-size".into());
     }
 
@@ -503,15 +532,11 @@ fn validate_inactive_target(path: &Path, arch: &str) -> Result<(), String> {
     if arch != "x86_64" && arch != "aarch64" {
         return Err("bad-slot-target".into());
     }
-    let size = fs::metadata(path).map_err(redact)?.len();
-    if size != SLOT_BYTES {
-        return Err("bad-slot-capacity".into());
-    }
     zeroos_storage::validate_partition_device(path, &expected).map_err(redact)
 }
 
 fn write_slot(container: &Path, slot: &Path) -> Result<(), String> {
-    let input = fs::File::open(container).map_err(redact)?;
+    let mut input = fs::File::open(container).map_err(redact)?;
     let expected = input.metadata().map_err(redact)?.len();
     if expected == 0 || expected > MAX_CONTAINER {
         return Err("bad-container-size".into());
@@ -521,10 +546,29 @@ fn write_slot(container: &Path, slot: &Path) -> Result<(), String> {
         .open(slot)
         .map_err(redact)?;
     output.seek(SeekFrom::Start(0)).map_err(redact)?;
-    let copied = std::io::copy(&mut input.take(expected), &mut output).map_err(redact)?;
+    let mut copied = 0u64;
+    let mut buffer = [0; 64 * 1024];
+    while copied < expected {
+        let remaining = expected.checked_sub(copied).ok_or("bad-container-size")?;
+        let wanted = buffer
+            .len()
+            .min(usize::try_from(remaining).map_err(|_| "bad-container-size")?);
+        let count = input.read(&mut buffer[..wanted]).map_err(redact)?;
+        if count == 0 {
+            return Err("short-slot-write".into());
+        }
+        output.write_all(&buffer[..count]).map_err(redact)?;
+        copied = copied
+            .checked_add(u64::try_from(count).map_err(|_| "bad-container-size")?)
+            .ok_or("bad-container-size")?;
+        #[cfg(feature = "acceptance")]
+        accept("during-slot-write");
+    }
     if copied != expected {
         return Err("short-slot-write".into());
     }
+    #[cfg(feature = "acceptance")]
+    accept("before-slot-flush");
     output.flush().map_err(redact)?;
     output.sync_all().map_err(redact)
 }
@@ -663,7 +707,7 @@ mod tests {
                 .status()?
                 .success()
         );
-        let mut container = Vec::from(MAGIC.as_slice());
+        let mut container = Vec::from(b"ZEROSLT1".as_slice());
         container.extend_from_slice(&(manifest.len() as u32).to_le_bytes());
         container.extend_from_slice(manifest.as_bytes());
         container.extend_from_slice(&fs::read(signature_path)?);

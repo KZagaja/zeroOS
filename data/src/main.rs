@@ -61,11 +61,31 @@ impl Drop for Secret {
 
 struct TerminalEcho {
     original: libc::termios,
+    original_flags: libc::c_int,
     restored: bool,
 }
 
 impl TerminalEcho {
     fn disable() -> Result<Self, String> {
+        // SAFETY: STDIN_FILENO is a valid scalar descriptor; F_GETFL/F_SETFL retain no pointer
+        // and touch no Rust memory. The interactive data tool owns terminal input while running,
+        // and the original flags are restored by this guard on success or partial failure.
+        let original_flags = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_GETFL) };
+        if original_flags < 0 {
+            return Err("unable to acquire terminal input".into());
+        }
+        // SAFETY: `original_flags` came from F_GETFL for this descriptor; only O_NONBLOCK is
+        // cleared, no pointer is passed or retained, and the guard restores the exact value.
+        if unsafe {
+            libc::fcntl(
+                libc::STDIN_FILENO,
+                libc::F_SETFL,
+                original_flags & !libc::O_NONBLOCK,
+            )
+        } != 0
+        {
+            return Err("unable to acquire terminal input".into());
+        }
         let mut original = std::mem::MaybeUninit::<libc::termios>::uninit();
         // SAFETY: `original` points to correctly aligned writable storage large enough for one
         // `termios`; `tcgetattr` initializes it on success and retains no pointer. No alias,
@@ -88,6 +108,7 @@ impl TerminalEcho {
         }
         Ok(Self {
             original,
+            original_flags,
             restored: false,
         })
     }
@@ -103,7 +124,19 @@ impl TerminalEcho {
         // valid, aligned, and immutably borrowed for the synchronous call. The kernel retains no
         // pointer; no mutable alias or cross-thread access exists, and a failure leaves Drop able
         // to retry restoration without other cleanup obligations.
-        if unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &self.original) } == 0 {
+        let terminal_restored = {
+            // SAFETY: `original` is initialized, aligned, live, and uniquely owned by this guard;
+            // the synchronous call retains no pointer and failure leaves Drop able to retry.
+            unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &self.original) }
+        } == 0;
+        // SAFETY: `original_flags` was read from this descriptor before mutation. F_SETFL reads
+        // only the scalar, retains nothing, and restores descriptor state after terminal use.
+        let flags_restored = {
+            // SAFETY: this scalar came from F_GETFL for the same live descriptor; F_SETFL retains
+            // no pointer, transfers no ownership, and restores the pre-prompt state.
+            unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_SETFL, self.original_flags) }
+        } == 0;
+        if terminal_restored && flags_restored {
             Ok(())
         } else {
             Err("unable to restore terminal input".into())
@@ -142,9 +175,6 @@ fn execute() -> Result<(), String> {
         {
             validate_partition_device(std::path::Path::new(device), "ZEROOS-DATA")
                 .map_err(redact)?;
-            if prompt_confirmation()? != "ERASE-USER-DATA" {
-                return Err("factory reset confirmation rejected".into());
-            }
             run(Command::new(CRYPTSETUP).args(["close", "zeroos-data"]), &[])?;
             provision(device)
         }
@@ -154,7 +184,7 @@ fn execute() -> Result<(), String> {
 
 fn repair_ext4(mapper: &str) -> Result<(), String> {
     let code = Command::new(E2FSCK)
-        .args(["-f", mapper])
+        .args(["-p", "-f", mapper])
         .status()
         .map_err(|_| "unable to start data engine".to_owned())?
         .code();
@@ -167,28 +197,6 @@ fn repair_ext4(mapper: &str) -> Result<(), String> {
 
 fn e2fsck_succeeded(code: Option<i32>) -> bool {
     matches!(code, Some(0 | 1))
-}
-
-fn prompt_confirmation() -> Result<String, String> {
-    print!("Type ERASE-USER-DATA to continue: ");
-    io::stdout()
-        .flush()
-        .map_err(|_| "unable to flush credential prompt".to_owned())?;
-    let mut bytes = Vec::with_capacity(32);
-    let mut byte = [0];
-    loop {
-        match io::stdin()
-            .read(&mut byte)
-            .map_err(|_| "unable to read credential".to_owned())?
-        {
-            0 => break,
-            1 if matches!(byte[0], b'\n' | b'\r') => break,
-            1 if bytes.len() < 32 => bytes.push(byte[0]),
-            1 => return Err("factory reset confirmation too long".into()),
-            _ => return Err("unable to read factory reset confirmation".into()),
-        }
-    }
-    String::from_utf8(bytes).map_err(|_| "invalid factory reset confirmation".into())
 }
 
 fn provision_checked(device: &str) -> Result<(), String> {

@@ -586,6 +586,11 @@ impl Runtime {
             .as_ref()
             .ok()
             .and_then(|text| update_sequence(text, self.update_install));
+        #[cfg(feature = "acceptance")]
+        if let Ok(text) = &output {
+            print!("{text}");
+            let _ = io::stdout().flush();
+        }
         if !success || sequence.is_none() {
             self.update = "failed";
             return;
@@ -600,6 +605,8 @@ impl Runtime {
             .and_then(|sequence| staged.stage(staged.confirmed.other(), sequence))
         {
             Ok(()) => {
+                #[cfg(feature = "acceptance")]
+                accept("before-journal-switch");
                 #[cfg(target_os = "linux")]
                 let persisted =
                     partition_device("ZEROOS-STATE")
@@ -615,6 +622,8 @@ impl Runtime {
             Err(error) => Err(error),
         };
         if result.is_ok() {
+            #[cfg(feature = "acceptance")]
+            accept("after-journal-switch");
             self.boot_state = staged;
             self.update = "staged";
             self.reboot_after_shutdown = true;
@@ -638,6 +647,8 @@ impl Runtime {
         if now.duration_since(*since) < Duration::from_secs(10) {
             return;
         }
+        #[cfg(feature = "acceptance")]
+        accept("before-health-confirmation");
         let mut confirmed = self.boot_state;
         if confirmed.confirm().is_ok() {
             #[cfg(all(not(test), target_os = "linux"))]
@@ -646,6 +657,8 @@ impl Runtime {
             #[cfg(any(test, not(target_os = "linux")))]
             let persisted = true;
             if persisted {
+                #[cfg(feature = "acceptance")]
+                accept("after-health-confirmation");
                 self.boot_state = confirmed;
                 self.healthy_since = None;
             }
@@ -655,12 +668,15 @@ impl Runtime {
     }
 
     fn repair_boot(&mut self) -> String {
+        #[cfg(feature = "acceptance")]
+        accept("before-repair-boot");
+        let remain_in_recovery = self.boot_state.booting == Some(Slot::Recovery);
         let confirmed = self.boot_state.confirmed;
         let mut repaired = self.boot_state;
         if repaired.repair(confirmed).is_err() {
             return "ERR ZEROOS/1 REPAIR_FAILED".into();
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", not(test)))]
         {
             let Some(journal) = partition_device("ZEROOS-STATE") else {
                 return "ERR ZEROOS/1 NO_STATE".into();
@@ -670,10 +686,15 @@ impl Runtime {
                 Err(_) => return "ERR ZEROOS/1 REPAIR_FAILED".into(),
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(any(not(target_os = "linux"), test))]
         {
             self.boot_state = repaired;
         }
+        if remain_in_recovery {
+            self.boot_state.booting = Some(Slot::Recovery);
+        }
+        #[cfg(feature = "acceptance")]
+        accept("after-repair-boot");
         "OK ZEROOS/1".into()
     }
 
@@ -687,7 +708,9 @@ impl Runtime {
         }
         #[cfg(target_os = "linux")]
         {
-            if unmount_data().is_err() {
+            #[cfg(feature = "acceptance")]
+            accept("before-repair-data");
+            if unmount_data().is_err() || set_stdin_nonblocking(false).is_err() {
                 return "ERR ZEROOS/1 UNMOUNT_FAILED".into();
             }
             match std::process::Command::new("/zeroos-data")
@@ -708,22 +731,27 @@ impl Runtime {
         "ERR ZEROOS/1 UNSUPPORTED_PLATFORM".into()
     }
 
-    fn factory_reset(&mut self) -> String {
+    fn factory_reset(&mut self, confirmation: &str) -> String {
+        if confirmation != "ERASE-USER-DATA" {
+            return "ERR ZEROOS/1 CONFIRMATION_REQUIRED literal=ERASE-USER-DATA".into();
+        }
         if self.recovery_busy() {
             return "ERR ZEROOS/1 BUSY".into();
         }
         #[cfg(target_os = "linux")]
         {
+            #[cfg(feature = "acceptance")]
+            accept("before-factory-reset");
             let Some(device) = partition_device("ZEROOS-DATA") else {
                 return "ERR ZEROOS/1 NO_DATA".into();
             };
-            if unmount_data().is_err() || set_stdin_nonblocking(false).is_err() {
+            if unmount_data().is_err() {
                 return "ERR ZEROOS/1 UNMOUNT_FAILED".into();
             }
             match std::process::Command::new("/zeroos-data")
                 .arg("reset")
                 .arg(device)
-                .arg("ERASE-USER-DATA")
+                .arg(confirmation)
                 .spawn()
             {
                 Ok(child) => {
@@ -753,6 +781,7 @@ impl Runtime {
         }
         self.data = "mounted";
         if matches!(mutation, Some(RecoveryMutation::FactoryReset)) {
+            let remain_in_recovery = self.boot_state.booting == Some(Slot::Recovery);
             if self.boot_state.reset_trials().is_err() {
                 self.data = "failed";
                 return;
@@ -764,6 +793,15 @@ impl Runtime {
                     Err(_) => self.data = "failed",
                 }
             }
+            if remain_in_recovery {
+                self.boot_state.booting = Some(Slot::Recovery);
+            }
+        }
+        #[cfg(feature = "acceptance")]
+        match mutation {
+            Some(RecoveryMutation::RepairData) => accept("after-repair-data"),
+            Some(RecoveryMutation::FactoryReset) => accept("after-factory-reset"),
+            None => {}
         }
     }
 
@@ -854,7 +892,7 @@ impl Runtime {
     fn console(&mut self, line: &str) -> String {
         let words: Vec<_> = line.split_whitespace().collect();
         match words.as_slice() {
-            ["help"] => "help status logs start <service> stop <service> restart <service> update check|install reboot recovery repair-boot repair-data factory-reset api-version selftest shutdown".into(),
+            ["help"] => "help status logs start <service> stop <service> restart <service> update check|install reboot recovery repair-boot repair-data factory-reset ERASE-USER-DATA api-version selftest shutdown".into(),
             ["status"] => self.dispatch("ZEROOS/1 STATUS"),
             ["logs"] => {
                 let response = self.dispatch("ZEROOS/1 LOGS");
@@ -880,7 +918,9 @@ impl Runtime {
             ["reboot", "recovery"] => self.dispatch("ZEROOS/1 RECOVERY"),
             ["repair-boot"] if self.boot_state.booting == Some(Slot::Recovery) => self.repair_boot(),
             ["repair-data"] if self.boot_state.booting == Some(Slot::Recovery) => self.repair_data(),
-            ["factory-reset"] if self.boot_state.booting == Some(Slot::Recovery) => self.factory_reset(),
+            ["factory-reset", confirmation] if self.boot_state.booting == Some(Slot::Recovery) => {
+                self.factory_reset(confirmation)
+            }
             ["api-version"] => "ZEROOS/1 socket=/run/zeroos/core-v1.sock".into(),
             ["shutdown"] => self.dispatch("ZEROOS/1 SHUTDOWN"),
             ["selftest"] if self.selftest.is_none() && !self.shutting_down => {
@@ -1031,6 +1071,13 @@ fn escape(input: &str) -> String {
         .replace('\t', "\\t")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
+}
+
+#[cfg(feature = "acceptance")]
+fn accept(phase: &str) {
+    println!("ZEROOS_ACCEPT phase={phase}");
+    let _ = io::stdout().flush();
+    thread::sleep(Duration::from_millis(250));
 }
 
 fn update_sequence(output: &str, install: bool) -> Option<u64> {
@@ -1379,18 +1426,14 @@ fn pid1() -> io::Result<()> {
 
     // ponytail: polling is enough for M2's fixed service count; move signals and I/O to epoll/eventfd when runtime load warrants it.
     while !runtime.shutting_down {
-        if SIGCHLD_PENDING.swap(false, Ordering::Relaxed) {
-            runtime.reap();
-        }
+        SIGCHLD_PENDING.store(false, Ordering::Relaxed);
+        runtime.reap();
         if SHUTDOWN_PENDING.swap(false, Ordering::Relaxed) {
             runtime.shutting_down = true;
             break;
         }
         serve(&mut runtime, &listener);
-        if !matches!(
-            runtime.recovery_mutation,
-            Some(RecoveryMutation::FactoryReset)
-        ) {
+        if runtime.recovery_mutation.is_none() {
             for line in read_console_lines(&mut console_input)? {
                 let response = runtime.console(&line);
                 if !response.is_empty() {
@@ -1406,6 +1449,8 @@ fn pid1() -> io::Result<()> {
         thread::sleep(Duration::from_millis(10));
     }
     runtime.shutdown();
+    #[cfg(feature = "acceptance")]
+    accept("before-reboot");
     // SAFETY: `reboot` receives only the valid Linux power-off scalar after all children are reaped
     // and filesystems synchronized. No pointer, initialization, aliasing, alignment, lifetime, or
     // shared-memory invariant is involved; failure returns to Rust with no resource transfer or
@@ -1624,6 +1669,15 @@ mod tests {
         assert_eq!(runtime.console("reboot recovery"), "OK ZEROOS/1");
         assert!(runtime.console("echo unsafe").contains("BAD_COMMAND"));
         assert!(runtime.console("status | shutdown").contains("BAD_COMMAND"));
+        runtime.boot_state.booting = Some(Slot::Recovery);
+        assert!(runtime.console("factory-reset").contains("BAD_COMMAND"));
+        assert_eq!(runtime.console("repair-boot"), "OK ZEROOS/1");
+        assert_eq!(runtime.boot_state.booting, Some(Slot::Recovery));
+        assert!(
+            runtime
+                .console("factory-reset WRONG")
+                .contains("CONFIRMATION_REQUIRED")
+        );
     }
 
     #[test]

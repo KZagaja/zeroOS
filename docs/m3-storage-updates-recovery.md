@@ -57,7 +57,8 @@ from validated in-memory state. `repair-data` is reserved for explicit unmount,
 `e2fsck -f`, and success-only remount. `factory-reset` remains recovery-only,
 requires exact `ERASE-USER-DATA`, twice-confirmed new credentials, and exact
 acknowledgement of the displayed recovery code. It targets only
-`ZEROOS-DATA`; PID 1 clears pending/trial state only after success. System,
+`ZEROOS-DATA`; the console command is exactly `factory-reset ERASE-USER-DATA`,
+and PID 1 clears pending/trial state only after success. System,
 recovery, ESP, firmware variables, and Secure Boot material are never reset.
 
 ## Key hierarchy and release custody
@@ -75,6 +76,44 @@ sign selector/system artifacts and manifests through the protected interface,
 and publish fixed architecture assets, hashes, and provenance to
 `KZagaja/zeroOS-releases`. Devices have no GitHub credential. Private keys may
 not enter GitHub arguments, environment variables, logs, or artifacts.
+
+Release dispatch accepts only a full source SHA that already has a successful
+exact-SHA M3 CI run. Production signing runs only on architecture-labelled
+protected runners after the `zeroos-sign` version and executable hash match
+protected configuration. Its provenance must expose public fingerprints and
+must not contain private or secret material labels.
+
+`zeroos-sign` reads root-owned `/etc/zeroos-sign/operator.conf`; it never accepts
+key configuration or authentication on its command line. The exact keys are
+`engine`, `selector-key`, `production-key`, `release-key`, `selector-cert`,
+`production-cert`, `recovery-cert`, `release-signer`, and `fingerprints`.
+Private-key values are PKCS#11 object-selector URIs without PIN or password
+attributes. Connector, module, and authentication configuration remains
+runner-owned. Workspace acceptance uses a disposable SoftHSM RSA-3072 object
+to cross the same libp11/OpenSSL RSA-PSS path before production hardware.
+
+The public trust ceremony commits `policy/m3-trust/pk.pem`, `kek.pem`,
+`db.pem`, `next-db.pem`, `recovery.pem`, the PKCS#1 RSA public keys
+`release-current.der` and `release-next.der`, and `fingerprints.sha256`. The
+fingerprint manifest uses
+`sha256sum`'s two-space format and covers every committed certificate and DER
+key. It never contains a private key, backup location, credential, or recovery
+material.
+
+The initial production initramfs embeds only `release-current.der` as
+`/etc/zeroos/release-keys/release-current.der`; committing the next public key
+does not activate it. A separately tested transition release is responsible
+for overlapping runtime release-key trust before signer rotation.
+
+Production publishes a candidate as a public prerelease. Native protected
+runners then invoke `cargo xtask test-release --arch <arch> --sequence <n>
+--url <public-tag-url>` without a download credential. That command verifies
+the hash manifest, source/architecture/sequence provenance, committed public
+fingerprints, PE signatures, and the slot manifest signature, installs a fresh
+512 MiB image, enrolls the committed public certificates in a fresh variable
+store, and boots both normal and recovery under Secure Boot. Only two passing
+native jobs permit promotion to the latest release; public assets are never
+replaced after a failed candidate.
 
 M3 promotion still requires the real offline ceremony, protected environment,
 independent security review, public release, production-signed Secure Boot

@@ -14,6 +14,22 @@ pub const MAX_MANIFEST: usize = 4096;
 pub const MAX_PAYLOAD: u64 = SLOT_BYTES - MAX_MANIFEST as u64 - SIGNATURE_BYTES as u64 - 16;
 pub const RELEASE_URL: &str =
     "https://github.com/KZagaja/zeroOS-releases/releases/latest/download/";
+const CONTAINER_MAGIC: &[u8; 8] = b"ZEROSLT1";
+
+pub fn container_manifest_size(header: &[u8]) -> Result<usize, &'static str> {
+    if header.len() != 12 || &header[..8] != CONTAINER_MAGIC {
+        return Err("BAD_CONTAINER_HEADER");
+    }
+    let size = u32::from_le_bytes(
+        header[8..12]
+            .try_into()
+            .map_err(|_| "BAD_CONTAINER_HEADER")?,
+    ) as usize;
+    if size == 0 || size > MAX_MANIFEST {
+        return Err("BAD_MANIFEST_SIZE");
+    }
+    Ok(size)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Partition {
@@ -533,6 +549,11 @@ mod tests {
     }
     #[test]
     fn manifest_and_reset_are_strict() -> Result<(), Box<dyn std::error::Error>> {
+        let mut header = *b"ZEROSLT1\0\0\0\0";
+        header[8..].copy_from_slice(&128u32.to_le_bytes());
+        assert_eq!(container_manifest_size(&header), Ok(128));
+        header[0] ^= 1;
+        assert!(container_manifest_size(&header).is_err());
         let good = b"version=1\narch=x86_64\nsequence=2\npayload-size=10\nsha256=0000000000000000000000000000000000000000000000000000000000000000\nsigner=release-1\n";
         assert_eq!(Manifest::parse(good, "x86_64")?.sequence, 2);
         assert!(Manifest::parse(good, "aarch64").is_err());
