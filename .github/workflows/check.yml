@@ -31,5 +31,15 @@ jobs:
         run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask check
       - name: M3 host acceptance
         run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask test
+      - name: Build architecture-pinned protected signer
+        run: |
+          docker run --rm --volume "$PWD:/work" zeroos-build cargo build --release --locked --package zeroos-sign
+          sha256sum target/release/zeroos-sign > "zeroos-sign-${{ matrix.arch }}.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zeroos-sign-${{ matrix.arch }}
+          path: |
+            target/release/zeroos-sign
+            zeroos-sign-${{ matrix.arch }}.sha256
       - name: M0-M2 regression and M3 native acceptance
         run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask test --arch ${{ matrix.arch }}

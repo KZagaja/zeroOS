@@ -286,6 +286,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 name = "xtask"
 version = "0.0.0"
 dependencies = [
+ "ring",
  "zeroos-storage",
 ]
 
@@ -315,6 +316,14 @@ dependencies = [
 [[package]]
 name = "zeroos-selector"
 version = "0.0.0"
+
+[[package]]
+name = "zeroos-sign"
+version = "0.1.0"
+dependencies = [
+ "ring",
+ "zeroos-storage",
+]
 
 [[package]]
 name = "zeroos-storage"

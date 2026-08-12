@@ -19,20 +19,26 @@ RUN printf 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian
         dwarves \
         flex \
         gdisk \
+        jq=1.7.1-6+deb13u1 \
+        libengine-pkcs11-openssl=0.4.13-1 \
         libelf-dev \
         libssl-dev \
         lld-19=1:19.1.7-3+b1 \
         mtools \
         musl-tools=1.2.5-3 \
         openssl=3.5.6-1~deb13u2 \
+        opensc=0.26.1-2 \
         ovmf \
+        python3-virt-firmware=24.11-2 \
         qemu-efi-aarch64 \
         qemu-system-arm \
         qemu-system-x86 \
         sbsigntool=0.9.4-3.2 \
+        softhsm2=2.6.1-3 \
         xz-utils \
     && rm -rf /var/lib/apt/lists/* \
-    && cargo install --locked cargo-deny --version 0.19.4
+    && cargo install --locked cargo-deny --version 0.19.4 \
+    && cargo install --locked cargo-fuzz --version 0.12.0
 RUN apt-get update \
     && apt-get install -y --no-install-recommends llvm-19=1:19.1.7-3+b1 \
     && rm -rf /var/lib/apt/lists/*

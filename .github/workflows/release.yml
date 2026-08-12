@@ -24,11 +24,39 @@ on:
         required: false
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
+  source-preflight:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require a full source SHA with successful exact-SHA native CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_STAGE: ${{ inputs.stage }}
+          SEQUENCE: ${{ inputs.sequence }}
+        run: |
+          test "${#SOURCE_SHA}" -eq 40
+          case "$SOURCE_SHA" in *[!0-9a-f]*) exit 1;; esac
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/check.yml/runs?head_sha=${SOURCE_SHA}&status=success&per_page=10" > ci-runs.json
+          jq -e --arg sha "$SOURCE_SHA" '.workflow_runs | any(.head_sha == $sha and .conclusion == "success")' ci-runs.json
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/compare/${SOURCE_SHA}...main" > comparison.json
+          jq -e '.status == "identical"' comparison.json
+          gh api --method GET "repos/KZagaja/zeroOS-releases/releases?per_page=100" > releases.json
+          if test "$RELEASE_STAGE" = production; then
+            case "$SEQUENCE" in *[!0-9]*|'') exit 1;; esac
+            next="$(jq '[.[].tag_name | capture("^sequence-(?<number>[0-9]+)$")? | .number | tonumber] | max // 0 | . + 1' releases.json)"
+            test "$SEQUENCE" = "$next"
+            ! jq -e --arg tag "sequence-${SEQUENCE}" 'any(.[]; .tag_name == $tag)' releases.json
+          else
+            ! jq -e --arg tag "recovery-${SOURCE_SHA}" 'any(.[]; .tag_name == $tag)' releases.json
+          fi
+
   recovery-build:
     if: inputs.stage == 'draft-recovery'
+    needs: source-preflight
     strategy:
       matrix:
         include:
@@ -39,11 +67,23 @@ jobs:
     runs-on: ${{ matrix.runner }}
     environment: offline-recovery-draft
     steps:
+      - name: Require protected environment and release token
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
+        run: |
+          test -n "$RELEASE_TOKEN"
+          gh api "repos/${GITHUB_REPOSITORY}/environments/offline-recovery-draft" > environment.json
+          jq -e '.protection_rules | any(.type == "required_reviewers" and .prevent_self_review == true and (.reviewers | length > 0))' environment.json
+          jq -e '.deployment_branch_policy.custom_branch_policies == true' environment.json
+          gh api "repos/${GITHUB_REPOSITORY}/environments/offline-recovery-draft/deployment-branch-policies" > branches.json
+          jq -e '.branch_policies | length == 1 and .[0].name == "main"' branches.json
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
       - run: test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
+      - run: (cd policy/m3-trust && sha256sum --check fingerprints.sha256)
       - run: docker build --pull=false --tag zeroos-build .
       - run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask test --arch ${{ matrix.arch }}
       - name: Prepare unsigned recovery payload
@@ -73,23 +113,44 @@ jobs:
 
   production-build:
     if: inputs.stage == 'production'
+    needs: source-preflight
     strategy:
       matrix:
         include:
-          - runner: ubuntu-24.04
-            arch: x86_64
+          - arch: x86_64
             recovery_hash_input: recovery_x86_64_sha256
-          - runner: ubuntu-24.04-arm
-            arch: aarch64
+            signer_hash_variable: ZEROOS_SIGN_X86_64_SHA256
+          - arch: aarch64
             recovery_hash_input: recovery_aarch64_sha256
-    runs-on: ${{ matrix.runner }}
+            signer_hash_variable: ZEROOS_SIGN_AARCH64_SHA256
+    runs-on: [self-hosted, linux, zeroos-production, "${{ matrix.arch }}"]
     environment: production-release
     steps:
+      - name: Require protected environment, release token, and pinned signer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
+          SIGNER_VERSION: ${{ vars.ZEROOS_SIGN_VERSION }}
+          SIGNER_SHA256: ${{ vars[matrix.signer_hash_variable] }}
+        run: |
+          test -n "$RELEASE_TOKEN"
+          test -n "$SIGNER_VERSION"
+          test "${#SIGNER_SHA256}" -eq 64
+          case "$SIGNER_SHA256" in *[!0-9a-f]*) exit 1;; esac
+          gh api "repos/${GITHUB_REPOSITORY}/environments/production-release" > environment.json
+          jq -e '.protection_rules | any(.type == "required_reviewers" and .prevent_self_review == true and (.reviewers | length > 0))' environment.json
+          jq -e '.deployment_branch_policy.custom_branch_policies == true' environment.json
+          gh api "repos/${GITHUB_REPOSITORY}/environments/production-release/deployment-branch-policies" > branches.json
+          jq -e '.branch_policies | length == 1 and .[0].name == "main"' branches.json
+          signer="$(command -v zeroos-sign)"
+          test "$(zeroos-sign --version)" = "$SIGNER_VERSION"
+          test "$(sha256sum "$signer" | cut -d' ' -f1)" = "$SIGNER_SHA256"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
       - run: test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
+      - run: (cd policy/m3-trust && sha256sum --check fingerprints.sha256)
       - name: Validate production inputs
         env:
           SEQUENCE: ${{ inputs.sequence }}
@@ -117,6 +178,11 @@ jobs:
           zeroos-sign package --arch "${{ matrix.arch }}" --sequence "${{ inputs.sequence }}" --payload "zeroos-system-${{ matrix.arch }}.efi" --output "zeroos-${{ matrix.arch }}.slot"
           sha256sum zeroos-${{ matrix.arch }}.slot zeroos-selector-${{ matrix.arch }}.efi zeroos-system-${{ matrix.arch }}.efi zeroos-recovery-${{ matrix.arch }}.efi > zeroos-${{ matrix.arch }}.sha256
           zeroos-sign provenance --source "${{ inputs.source_sha }}" --arch "${{ matrix.arch }}" --sequence "${{ inputs.sequence }}" --hashes "zeroos-${{ matrix.arch }}.sha256" --output "zeroos-${{ matrix.arch }}.provenance.json"
+          jq -e --arg source "${{ inputs.source_sha }}" '.source == $source and (.public_fingerprints | length > 0)' "zeroos-${{ matrix.arch }}.provenance.json"
+          while read -r fingerprint _; do
+            jq -e --arg fingerprint "$fingerprint" '.public_fingerprints | any(ascii_downcase == ($fingerprint | ascii_downcase))' "zeroos-${{ matrix.arch }}.provenance.json"
+          done < policy/m3-trust/fingerprints.sha256
+          ! grep -Eiq 'private[-_ ]?(key|material)|secret[-_ ]?(key|material)' "zeroos-${{ matrix.arch }}.provenance.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: zeroos-${{ matrix.arch }}
@@ -142,4 +208,41 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
         run: |
-          gh release create "sequence-${{ inputs.sequence }}" zeroos-*.slot zeroos-*.sha256 zeroos-*.provenance.json zeroos-selector-*.efi zeroos-system-*.efi zeroos-recovery-*.efi --repo KZagaja/zeroOS-releases --title "zeroOS sequence ${{ inputs.sequence }}" --notes "Source ${{ inputs.source_sha }}"
+          gh release create "sequence-${{ inputs.sequence }}" zeroos-*.slot zeroos-*.sha256 zeroos-*.provenance.json zeroos-selector-*.efi zeroos-system-*.efi zeroos-recovery-*.efi --repo KZagaja/zeroOS-releases --prerelease --title "zeroOS sequence ${{ inputs.sequence }}" --notes "Source ${{ inputs.source_sha }}"
+
+  install-test:
+    if: inputs.stage == 'production'
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+    runs-on: [self-hosted, linux, zeroos-production, "${{ matrix.arch }}"]
+    environment: production-release
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
+      - run: (cd policy/m3-trust && sha256sum --check fingerprints.sha256)
+      - run: docker build --pull=false --tag zeroos-build .
+      - name: Install and boot unauthenticated public release
+        run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask test-release --arch "${{ matrix.arch }}" --sequence "${{ inputs.sequence }}" --url "https://github.com/KZagaja/zeroOS-releases/releases/tag/sequence-${{ inputs.sequence }}" | tee "install-${{ matrix.arch }}.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: install-${{ matrix.arch }}
+          path: |
+            target/m3/${{ matrix.arch }}/qemu-release-*.log
+            install-${{ matrix.arch }}.log
+
+  promote:
+    if: inputs.stage == 'production'
+    needs: install-test
+    runs-on: ubuntu-24.04
+    environment: production-release
+    steps:
+      - name: Promote passing candidate to latest production release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
+        run: gh release edit "sequence-${{ inputs.sequence }}" --repo KZagaja/zeroOS-releases --prerelease=false --latest

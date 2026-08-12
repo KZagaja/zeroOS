@@ -58,3 +58,43 @@ acceptance jobs. Kordian Zagaja owns review of Debian security notices and upstr
 - Alternatives: no existing admitted authenticated-variable tooling.
 - License/distribution: GPL-2.0-only; build-image use only.
 - Targets/transitives: used for both firmware targets with non-production keys only.
+
+## python3-virt-firmware 24.11-2 — Retain
+
+- Requirement: deterministic offline editing and inspection of disposable EDK2 variable-store copies for Secure Boot and rotation tests.
+- Alternatives: efitools creates authenticated updates but cannot apply them to an offline variable store; interactive firmware enrollment is not deterministic.
+- License/distribution: GPL-2.0-or-later; Debian supplies the Python cryptography, importlib-resources, and pefile closure.
+- Targets/transitives: host tooling on both native runners; never included in the runtime or release artifacts.
+- Boundary: reads and writes only per-scenario temporary variable-store copies containing disposable public test material.
+
+## cargo-fuzz 0.12.0 and libfuzzer-sys 0.4.9 — Retain
+
+- Requirement: fixed-seed bounded smoke fuzzing of the hostile M3 journal, container-header, and manifest parsers.
+- Alternatives: unit cases cannot explore arbitrary parser byte streams; a second custom mutator would duplicate libFuzzer.
+- Maintenance/security: exact Cargo install version and independent fuzz lockfile; review Rust fuzz project releases before updates.
+- License/distribution: cargo-fuzz and libfuzzer-sys are MIT/Apache-2.0; the locked helper closure is build/test-only.
+- Targets/boundary: host CI for both native runners; no fuzzing code or dependency enters a zeroOS runtime artifact.
+
+## jq 1.7.1-6+deb13u1 — Retain
+
+- Requirement: parse untrusted production provenance with exact JSON types and values during protected release and public installation verification.
+- Alternatives: substring matching is ambiguous; a custom JSON parser would duplicate a mature security boundary; adding a runtime Rust JSON dependency would expand the production closure unnecessarily.
+- Maintenance/security: exact Debian snapshot version; review Debian and upstream jq advisories before updates.
+- License/distribution: MIT; pinned build/release image use only.
+- Targets/boundary: native x86_64 and aarch64 release runners; parses only bounded public provenance and never enters runtime artifacts.
+
+## YubiHSM PKCS#11 2.8.0 and libp11 0.4.13-1 — Retain
+
+- Requirement: non-exporting production RSA-3072 Secure Boot and RSA-PSS/SHA-256 release signing through the accepted PKCS#11 boundary.
+- Alternatives: software keys violate M3 custody; cloud KMS changes the accepted ceremony; custom PKCS#11/crypto is prohibited.
+- Maintenance/security: Yubico's signed 2.8.0 source is SHA-256 pinned in `policy/sources.lock`; libp11 is pinned through the Debian snapshot. Review Yubico, OpenSSL, libp11, and Debian advisories before updates.
+- License/distribution: Yubico components are Apache-2.0 and libp11 is LGPL-2.1-or-later; protected-runner infrastructure only.
+- Targets/boundary: native x86_64 and aarch64 Linux runners. PKCS#11 URIs select objects only; connector/authentication configuration stays root-owned outside Git, arguments, environment values, artifacts, and logs.
+
+## SoftHSM 2.6.1-3 and OpenSC 0.26.1-2 — Retain
+
+- Requirement: exercise the protected signer's real PKCS#11 RSA-3072/PSS command path with disposable test objects before production hardware.
+- Alternatives: mocks do not cross the PKCS#11 engine boundary; production HSM tests would risk protected state.
+- Maintenance/security: exact Debian snapshot versions; review Debian, SoftHSM, OpenSC, Botan, and libp11 advisories before updates.
+- License/distribution: SoftHSM is BSD-2-Clause; OpenSC is LGPL-2.1-or-later; build-image use only.
+- Targets/boundary: native x86_64 and aarch64 test hosts; fixed disposable credentials and objects are process-local, deleted after the bounded smoke test, and never enter runtime or release artifacts.
