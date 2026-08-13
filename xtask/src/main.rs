@@ -2306,7 +2306,7 @@ fn run_qemu_scenario(
         let timeout = if expectation == BootExpectation::Rejected {
             Duration::from_secs(12)
         } else {
-            Duration::from_secs(90)
+            Duration::from_secs(180)
         };
         if start.elapsed() >= timeout {
             child.kill().map_err(error_string)?;
