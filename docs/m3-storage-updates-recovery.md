@@ -64,7 +64,7 @@ recovery, ESP, firmware variables, and Secure Boot material are never reset.
 ## Key hierarchy and release custody
 
 PK and KEK remain offline. Production db signing and RSA release signing are
-available only through a manually approved protected signer. The recovery db
+available only through the protected signer. The recovery db
 certificate and recovery signer are independent and offline. Rotation adds the
 next db under KEK, publishes an old-key transition release trusting both
 manifest keys, switches signing, then removes or revokes the old db entry.
@@ -77,8 +77,11 @@ and publish fixed architecture assets, hashes, and provenance to
 `KZagaja/zeroOS-releases`. Devices have no GitHub credential. Private keys may
 not enter GitHub arguments, environment variables, logs, or artifacts.
 
-Release dispatch accepts only a full source SHA that already has a successful
-exact-SHA M3 CI run. Production signing runs only on architecture-labelled
+Under ADR 0002, only the repository owner may dispatch a release from `main`.
+Dispatch accepts only a full source SHA identical to `main` that already has a
+successful exact-SHA `main` push CI run. Both release environments permit only
+`main`; unavailable reviewer/self-review rules are not required. Production
+signing runs only on architecture-labelled
 protected runners after the `zeroos-sign` version and executable hash match
 protected configuration. Its provenance must expose public fingerprints and
 must not contain private or secret material labels.
@@ -105,17 +108,21 @@ The initial production initramfs embeds only `release-current.der` as
 does not activate it. A separately tested transition release is responsible
 for overlapping runtime release-key trust before signer rotation.
 
-Production publishes a candidate as a public prerelease. Native protected
+Production publishes a candidate as an immutable public prerelease. Native protected
 runners then invoke `cargo xtask test-release --arch <arch> --sequence <n>
 --url <public-tag-url>` without a download credential. That command verifies
 the hash manifest, source/architecture/sequence provenance, committed public
 fingerprints, PE signatures, and the slot manifest signature, installs a fresh
 512 MiB image, enrolls the committed public certificates in a fresh variable
 store, and boots both normal and recovery under Secure Boot. Only two passing
-native jobs permit promotion to the latest release; public assets are never
-replaced after a failed candidate.
+native jobs permit copying those exact candidate bytes to the immutable final
+release and marking it latest; public assets are never replaced after
+publication.
 
-M3 promotion still requires the real offline ceremony, protected environment,
-independent security review, public release, production-signed Secure Boot
-installation on both architectures, exact-SHA native CI, and the evidence/tag
-sequence in `ROADMAP.md`.
+M3 promotion still requires the real offline ceremony, signed/timestamped
+record and redacted HSM audit export, protected environments and runners, two
+encrypted geographic backups with a verified restore, immutable public
+release, production-signed Secure Boot installation on both architectures,
+exact-SHA native CI, and the evidence/tag sequence in `ROADMAP.md`. ADR 0002
+permanently removes independent review and second-person witnessing and records
+the resulting single-operator compromise risk.

@@ -314,13 +314,15 @@ Data provisioning uses LUKS2 AES-XTS-plain64 with a 512-bit key and Argon2id, tw
 
 ### M3 key and promotion gates
 
-PK and KEK are offline; the recovery signer is separate and offline; the RSA-3072 production release signer is exposed only through a manually approved protected GitHub Environment signing interface. Private keys must never enter Git, artifacts, command arguments, environment variables, or logs. Custodians record SHA-256 fingerprints, two geographically separate encrypted backups, a witnessed recovery test, and an emergency KEK-authorized db removal/dbx procedure offline.
+PK and KEK are offline; the recovery signer is separate and offline; the RSA-3072 production release signer is exposed only through a protected GitHub Environment signing interface. Private keys must never enter Git, artifacts, command arguments, environment variables, or logs. The operator records SHA-256 fingerprints, redacted HSM audit exports, two geographically separate encrypted backups, a verified restore test, and an emergency KEK-authorized db removal/dbx procedure offline.
 
 Rotation overlaps trust: add the next db certificate under KEK, publish an old-key transition release that trusts both, switch the protected signer, then remove or revoke the old certificate under KEK. QEMU uses disposable non-production keys to exercise addition, transition, rejection, and revocation.
 
-The empty public artifact-only repository is [KZagaja/zeroOS-releases](https://github.com/KZagaja/zeroOS-releases); the source repository remains private. Achievement remains gated on the offline ceremony, protected-environment provisioning, a production-signed install from the implementation SHA, independent security review evidence, and passing native CI on the exact evidence commit. No achievement evidence or `m3-achieved` tag may be created before those human gates are real.
+The empty public artifact-only repository is [KZagaja/zeroOS-releases](https://github.com/KZagaja/zeroOS-releases); the source repository remains private. Under [ADR 0002](docs/adr/0002-m3-single-operator-promotion.md), M3 permanently has no independent-review or second-person-witness gate and accepts the resulting loss of separation-of-duties assurance. Achievement instead requires owner-only exact-`main` dispatch, main-only environments, successful exact-SHA native CI, signed/timestamped ceremony and HSM audit evidence, two encrypted geographic backups with a verified restore, a production-signed install from the implementation SHA, immutable public release artifacts, and passing native CI on the exact evidence commit. No achievement evidence or `m3-achieved` tag may be created before those gates are real.
 
 **Change log:** 2026-08-06 — M3 implementation started; production key ceremony, protected signing, public release publication, independent review, and exact-commit native acceptance evidence remain pending.
+
+**Change log:** 2026-08-13 — accepted ADR 0002's permanent single-operator assurance exception; independent review and second-person witnessing are removed, while owner-only exact-main promotion, hardware audit, signed ceremony, backup/restore, immutable public release, and exact-commit native evidence remain pending.
 
 ## M4 — Hardware and Rust Policy Services
 
@@ -574,3 +576,4 @@ Append entries; do not rewrite or remove historical decisions or milestone evide
 | 2026-08-05 | Began M0 repository foundation implementation. | Workspace, policy, reproducible build contract, and native CI implementation started; acceptance remains pending. |
 | 2026-08-05 | Passed local M0 acceptance on native arm64. | Pinned-container `cargo xtask check` and both architecture-context test commands passed; M0 remains `In progress` until both native GitHub jobs pass. |
 | 2026-08-05 | Marked M0 Repository Foundation `Achieved`. | Both native jobs passed foundation commit `1fd59d0a20a7095c5e5b9d7bfd402d3ccf78f92c` in [run 30998375727](https://github.com/KZagaja/zeroOS/actions/runs/30998375727); recorded both release hashes and the build-image digest. |
+| 2026-08-13 | Accepted ADR 0002 for M3 single-operator promotion. | Permanently removed independent review and second-person witnessing, explicitly accepting lost separation of duties; all replacement owner-only, hardware-audit, recovery, public-release, and exact-commit gates remain unmet. |

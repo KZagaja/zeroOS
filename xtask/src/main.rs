@@ -1277,13 +1277,7 @@ fn interruption_marker(name: &str) -> Option<&'static str> {
 }
 
 fn test_release(arch: Arch, sequence: u64, public_tag_url: &str) -> Result<(), String> {
-    let expected_tag =
-        format!("https://github.com/KZagaja/zeroOS-releases/releases/tag/sequence-{sequence}");
-    if public_tag_url.trim_end_matches('/') != expected_tag {
-        return Err(format!(
-            "zeroOS: public release URL must be exactly {expected_tag}"
-        ));
-    }
+    let release_tag = public_release_tag(sequence, public_tag_url)?;
     let root = env::temp_dir().join(format!(
         "zeroos-m3-release-{}-{}-{sequence}",
         std::process::id(),
@@ -1304,7 +1298,7 @@ fn test_release(arch: Arch, sequence: u64, public_tag_url: &str) -> Result<(), S
         format!("zeroos-recovery-{}.efi", arch.name()),
     ];
     let download_base =
-        format!("https://github.com/KZagaja/zeroOS-releases/releases/download/sequence-{sequence}");
+        format!("https://github.com/KZagaja/zeroOS-releases/releases/download/{release_tag}");
     for name in &names {
         download_public_asset(&format!("{download_base}/{name}"), &root.join(name))?;
     }
@@ -1383,6 +1377,18 @@ fn test_release(arch: Arch, sequence: u64, public_tag_url: &str) -> Result<(), S
         &enrolled_vars,
         BootExpectation::Recovery,
     )
+}
+
+fn public_release_tag(sequence: u64, url: &str) -> Result<String, String> {
+    let candidate = format!("candidate-sequence-{sequence}");
+    let final_tag = format!("sequence-{sequence}");
+    let prefix = "https://github.com/KZagaja/zeroOS-releases/releases/tag/";
+    match url.trim_end_matches('/').strip_prefix(prefix) {
+        Some(tag) if tag == candidate || tag == final_tag => Ok(tag.to_owned()),
+        _ => Err(format!(
+            "zeroOS: public release URL must select {candidate} or {final_tag}"
+        )),
+    }
 }
 
 fn download_public_asset(url: &str, output: &Path) -> Result<(), String> {
@@ -3509,6 +3515,21 @@ mod tests {
             ])
             .is_err()
         );
+        assert_eq!(
+            public_release_tag(
+                1,
+                "https://github.com/KZagaja/zeroOS-releases/releases/tag/candidate-sequence-1",
+            ),
+            Ok("candidate-sequence-1".into())
+        );
+        assert_eq!(
+            public_release_tag(
+                1,
+                "https://github.com/KZagaja/zeroOS-releases/releases/tag/sequence-1/",
+            ),
+            Ok("sequence-1".into())
+        );
+        assert!(public_release_tag(1, "https://example.test/sequence-1").is_err());
     }
 
     #[test]
