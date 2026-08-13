@@ -118,15 +118,15 @@ fn run() -> Result<(), String> {
 
 #[cfg(feature = "acceptance")]
 fn accept(phase: &str) {
-    if let Ok(mut console) = fs::OpenOptions::new().write(true).open("/dev/console") {
-        let _ = writeln!(console, "ZEROOS_ACCEPT phase={phase}");
-    }
-    let first_repeated = match phase {
+    let emit = match phase {
         "during-download-persist" => !DOWNLOAD_CUT_READY.swap(true, Ordering::Relaxed),
         "during-slot-write" => !SLOT_WRITE_CUT_READY.swap(true, Ordering::Relaxed),
         _ => true,
     };
-    if first_repeated {
+    if emit {
+        if let Ok(mut console) = fs::OpenOptions::new().write(true).open("/dev/console") {
+            let _ = writeln!(console, "ZEROOS_ACCEPT phase={phase}");
+        }
         std::thread::sleep(Duration::from_millis(250));
     }
 }
