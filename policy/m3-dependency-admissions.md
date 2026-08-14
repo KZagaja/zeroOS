@@ -89,7 +89,7 @@ acceptance jobs. Kordian Zagaja owns review of Debian security notices and upstr
 - Alternatives: software keys violate M3 custody; cloud KMS changes the accepted ceremony; custom PKCS#11/crypto is prohibited.
 - Maintenance/security: Yubico's signed 2.8.0 source is SHA-256 pinned in `policy/sources.lock`; libp11 is pinned through the Debian snapshot. Review Yubico, OpenSSL, libp11, and Debian advisories before updates.
 - License/distribution: Yubico components are Apache-2.0 and libp11 is LGPL-2.1-or-later; protected-runner infrastructure only.
-- Targets/boundary: native x86_64 and aarch64 Linux runners. PKCS#11 URIs select objects only; connector/authentication configuration stays root-owned outside Git, arguments, environment values, artifacts, and logs.
+- Targets/boundary: isolated x86_64 Linux signing host. PKCS#11 URIs select objects only; connector/authentication configuration stays root-owned outside Git, arguments, environment values, artifacts, and logs. Native x86_64 and aarch64 hosted builders never load this production module.
 
 ## SoftHSM 2.6.1-3 and OpenSC 0.26.1-2 — Retain
 

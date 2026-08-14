@@ -122,20 +122,44 @@ jobs:
     strategy:
       matrix:
         include:
-          - arch: x86_64
-            recovery_hash_input: recovery_x86_64_sha256
-            signer_hash_variable: ZEROOS_SIGN_X86_64_SHA256
-          - arch: aarch64
-            recovery_hash_input: recovery_aarch64_sha256
-            signer_hash_variable: ZEROOS_SIGN_AARCH64_SHA256
-    runs-on: [self-hosted, linux, zeroos-production, "${{ matrix.arch }}"]
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
+      - run: (cd policy/m3-trust && sha256sum --check fingerprints.sha256)
+      - run: docker build --pull=false --tag zeroos-build .
+      - run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask test --arch ${{ matrix.arch }}
+      - name: Prepare unsigned production inputs
+        run: |
+          cp "target/m3/${{ matrix.arch }}/selector.efi" "zeroos-selector-${{ matrix.arch }}-unsigned.efi"
+          cp "target/m3/${{ matrix.arch }}/kernel.efi" "zeroos-system-${{ matrix.arch }}-unsigned.efi"
+          sha256sum "zeroos-selector-${{ matrix.arch }}-unsigned.efi" "zeroos-system-${{ matrix.arch }}-unsigned.efi" > "zeroos-unsigned-${{ matrix.arch }}.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-production-${{ matrix.arch }}
+          path: |
+            zeroos-selector-${{ matrix.arch }}-unsigned.efi
+            zeroos-system-${{ matrix.arch }}-unsigned.efi
+            zeroos-unsigned-${{ matrix.arch }}.sha256
+
+  production-sign:
+    if: inputs.stage == 'production'
+    needs: production-build
+    runs-on: [self-hosted, Linux, X64, zeroos-production]
     environment: production-release
     steps:
       - name: Require release token and pinned signer
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
           SIGNER_VERSION: ${{ vars.ZEROOS_SIGN_VERSION }}
-          SIGNER_SHA256: ${{ vars[matrix.signer_hash_variable] }}
+          SIGNER_SHA256: ${{ vars.ZEROOS_SIGN_X86_64_SHA256 }}
         run: |
           test -n "$RELEASE_TOKEN"
           test -n "$SIGNER_VERSION"
@@ -150,59 +174,75 @@ jobs:
           persist-credentials: false
       - run: test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
       - run: (cd policy/m3-trust && sha256sum --check fingerprints.sha256)
-      - name: Validate production inputs
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: unsigned-production-*
+          merge-multiple: true
+      - name: Verify native build artifacts and production inputs
         env:
           SEQUENCE: ${{ inputs.sequence }}
-          RECOVERY_SHA256: ${{ inputs[matrix.recovery_hash_input] }}
+          RECOVERY_X86_64_SHA256: ${{ inputs.recovery_x86_64_sha256 }}
+          RECOVERY_AARCH64_SHA256: ${{ inputs.recovery_aarch64_sha256 }}
         run: |
-          test -n "$SEQUENCE"
-          test -n "$RECOVERY_SHA256"
           case "$SEQUENCE" in *[!0-9]*|'') exit 1;; esac
-          case "$RECOVERY_SHA256" in *[!0-9a-f]*|'') exit 1;; esac
-          test "${#RECOVERY_SHA256}" -eq 64
-      - run: docker build --pull=false --tag zeroos-build .
-      - run: docker run --rm --volume "$PWD:/work" zeroos-build cargo xtask test --arch ${{ matrix.arch }}
+          for digest in "$RECOVERY_X86_64_SHA256" "$RECOVERY_AARCH64_SHA256"; do
+            test "${#digest}" -eq 64
+            case "$digest" in *[!0-9a-f]*) exit 1;; esac
+          done
+          sha256sum --check zeroos-unsigned-x86_64.sha256
+          sha256sum --check zeroos-unsigned-aarch64.sha256
       - name: Fetch and verify offline-signed recovery
         env:
           GH_TOKEN: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
-          RECOVERY_SHA256: ${{ inputs[matrix.recovery_hash_input] }}
+          RECOVERY_X86_64_SHA256: ${{ inputs.recovery_x86_64_sha256 }}
+          RECOVERY_AARCH64_SHA256: ${{ inputs.recovery_aarch64_sha256 }}
         run: |
-          gh release download "recovery-${{ inputs.source_sha }}" --repo KZagaja/zeroOS-releases --pattern "zeroos-recovery-${{ matrix.arch }}.efi"
-          test "$(sha256sum "zeroos-recovery-${{ matrix.arch }}.efi" | cut -d' ' -f1)" = "$RECOVERY_SHA256"
-          zeroos-sign verify-recovery --arch "${{ matrix.arch }}" --payload "zeroos-recovery-${{ matrix.arch }}.efi"
+          for arch in x86_64 aarch64; do
+            gh release download "recovery-${{ inputs.source_sha }}" --repo KZagaja/zeroOS-releases --pattern "zeroos-recovery-${arch}.efi"
+            if test "$arch" = x86_64; then expected="$RECOVERY_X86_64_SHA256"; else expected="$RECOVERY_AARCH64_SHA256"; fi
+            test "$(sha256sum "zeroos-recovery-${arch}.efi" | cut -d' ' -f1)" = "$expected"
+            zeroos-sign verify-recovery --arch "$arch" --payload "zeroos-recovery-${arch}.efi"
+          done
       - name: Sign through protected non-exporting signer
         run: |
-          zeroos-sign sign-efi --role selector --input "target/m3/${{ matrix.arch }}/selector.efi" --output "zeroos-selector-${{ matrix.arch }}.efi"
-          zeroos-sign sign-efi --role production --input "target/m3/${{ matrix.arch }}/kernel.efi" --output "zeroos-system-${{ matrix.arch }}.efi"
-          zeroos-sign package --arch "${{ matrix.arch }}" --sequence "${{ inputs.sequence }}" --payload "zeroos-system-${{ matrix.arch }}.efi" --output "zeroos-${{ matrix.arch }}.slot"
-          sha256sum zeroos-${{ matrix.arch }}.slot zeroos-selector-${{ matrix.arch }}.efi zeroos-system-${{ matrix.arch }}.efi zeroos-recovery-${{ matrix.arch }}.efi > zeroos-${{ matrix.arch }}.sha256
-          zeroos-sign provenance --source "${{ inputs.source_sha }}" --arch "${{ matrix.arch }}" --sequence "${{ inputs.sequence }}" --hashes "zeroos-${{ matrix.arch }}.sha256" --output "zeroos-${{ matrix.arch }}.provenance.json"
-          jq -e --arg source "${{ inputs.source_sha }}" '.source == $source and (.public_fingerprints | length > 0)' "zeroos-${{ matrix.arch }}.provenance.json"
-          while read -r fingerprint _; do
-            jq -e --arg fingerprint "$fingerprint" '.public_fingerprints | any(ascii_downcase == ($fingerprint | ascii_downcase))' "zeroos-${{ matrix.arch }}.provenance.json"
-          done < policy/m3-trust/fingerprints.sha256
-          ! grep -Eiq 'private[-_ ]?(key|material)|secret[-_ ]?(key|material)' "zeroos-${{ matrix.arch }}.provenance.json"
+          for arch in x86_64 aarch64; do
+            zeroos-sign sign-efi --role selector --input "zeroos-selector-${arch}-unsigned.efi" --output "zeroos-selector-${arch}.efi"
+            zeroos-sign sign-efi --role production --input "zeroos-system-${arch}-unsigned.efi" --output "zeroos-system-${arch}.efi"
+            zeroos-sign package --arch "$arch" --sequence "${{ inputs.sequence }}" --payload "zeroos-system-${arch}.efi" --output "zeroos-${arch}.slot"
+            sha256sum "zeroos-${arch}.slot" "zeroos-selector-${arch}.efi" "zeroos-system-${arch}.efi" "zeroos-recovery-${arch}.efi" > "zeroos-${arch}.sha256"
+            zeroos-sign provenance --source "${{ inputs.source_sha }}" --arch "$arch" --sequence "${{ inputs.sequence }}" --hashes "zeroos-${arch}.sha256" --output "zeroos-${arch}.provenance.json"
+            jq -e --arg source "${{ inputs.source_sha }}" '.source == $source and (.public_fingerprints | length > 0)' "zeroos-${arch}.provenance.json"
+            while read -r fingerprint _; do
+              jq -e --arg fingerprint "$fingerprint" '.public_fingerprints | any(ascii_downcase == ($fingerprint | ascii_downcase))' "zeroos-${arch}.provenance.json"
+            done < policy/m3-trust/fingerprints.sha256
+            ! grep -Eiq 'private[-_ ]?(key|material)|secret[-_ ]?(key|material)' "zeroos-${arch}.provenance.json"
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: zeroos-${{ matrix.arch }}
+          name: zeroos-release
           path: |
-            zeroos-${{ matrix.arch }}.slot
-            zeroos-${{ matrix.arch }}.sha256
-            zeroos-${{ matrix.arch }}.provenance.json
-            zeroos-selector-${{ matrix.arch }}.efi
-            zeroos-system-${{ matrix.arch }}.efi
-            zeroos-recovery-${{ matrix.arch }}.efi
+            zeroos-x86_64.slot
+            zeroos-aarch64.slot
+            zeroos-x86_64.sha256
+            zeroos-aarch64.sha256
+            zeroos-x86_64.provenance.json
+            zeroos-aarch64.provenance.json
+            zeroos-selector-x86_64.efi
+            zeroos-selector-aarch64.efi
+            zeroos-system-x86_64.efi
+            zeroos-system-aarch64.efi
+            zeroos-recovery-x86_64.efi
+            zeroos-recovery-aarch64.efi
 
   publish:
     if: inputs.stage == 'production'
-    needs: production-build
+    needs: production-sign
     runs-on: ubuntu-24.04
     environment: production-release
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: zeroos-*
-          merge-multiple: true
+          name: zeroos-release
       - name: Publish fixed-name assets to public artifact repository
         env:
           GH_TOKEN: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
@@ -215,8 +255,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [x86_64, aarch64]
-    runs-on: [self-hosted, linux, zeroos-production, "${{ matrix.arch }}"]
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
     environment: production-release
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

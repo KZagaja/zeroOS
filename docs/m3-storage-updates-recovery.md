@@ -81,10 +81,12 @@ Under ADR 0002, only the repository owner may dispatch a release from `main`.
 Dispatch accepts only a full source SHA identical to `main` that already has a
 successful exact-SHA `main` push CI run. Both release environments permit only
 `main`; unavailable reviewer/self-review rules are not required. Production
-signing runs only on architecture-labelled
-protected runners after the `zeroos-sign` version and executable hash match
-protected configuration. Its provenance must expose public fingerprints and
-must not contain private or secret material labels.
+ADR 0003 assigns native builds and boot tests to GitHub-hosted x86_64 and
+aarch64 runners. One isolated self-hosted x86_64 signer verifies their unsigned
+artifact manifests and signs both architectures only after the `zeroos-sign`
+version and executable hash match protected configuration. Its provenance must
+expose public fingerprints and must not contain private or secret material
+labels.
 
 `zeroos-sign` reads root-owned `/etc/zeroos-sign/operator.conf`; it never accepts
 key configuration or authentication on its command line. The exact keys are
@@ -108,8 +110,8 @@ The initial production initramfs embeds only `release-current.der` as
 does not activate it. A separately tested transition release is responsible
 for overlapping runtime release-key trust before signer rotation.
 
-Production publishes a candidate as an immutable public prerelease. Native protected
-runners then invoke `cargo xtask test-release --arch <arch> --sequence <n>
+Production publishes a candidate as an immutable public prerelease. Native
+GitHub-hosted runners then invoke `cargo xtask test-release --arch <arch> --sequence <n>
 --url <public-tag-url>` without a download credential. That command verifies
 the hash manifest, source/architecture/sequence provenance, committed public
 fingerprints, PE signatures, and the slot manifest signature, installs a fresh
