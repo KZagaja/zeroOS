@@ -1,4 +1,4 @@
-name: M3 production release
+name: M3 pre-1.0 release
 
 on:
   workflow_dispatch:
@@ -203,7 +203,7 @@ jobs:
             test "$(sha256sum "zeroos-recovery-${arch}.efi" | cut -d' ' -f1)" = "$expected"
             zeroos-sign verify-recovery --arch "$arch" --payload "zeroos-recovery-${arch}.efi"
           done
-      - name: Sign through protected non-exporting signer
+      - name: Sign through protected PKCS11 interface
         run: |
           for arch in x86_64 aarch64; do
             zeroos-sign sign-efi --role selector --input "zeroos-selector-${arch}-unsigned.efi" --output "zeroos-selector-${arch}.efi"
@@ -285,7 +285,7 @@ jobs:
     runs-on: ubuntu-24.04
     environment: production-release
     steps:
-      - name: Publish exact candidate bytes as latest production release
+      - name: Publish exact candidate bytes as latest pre-1.0 release
         env:
           GH_TOKEN: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
         run: |

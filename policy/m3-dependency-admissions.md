@@ -83,18 +83,10 @@ acceptance jobs. Kordian Zagaja owns review of Debian security notices and upstr
 - License/distribution: MIT; pinned build/release image use only.
 - Targets/boundary: native x86_64 and aarch64 release runners; parses only bounded public provenance and never enters runtime artifacts.
 
-## YubiHSM PKCS#11 2.8.0 and libp11 0.4.13-1 — Retain
+## SoftHSM 2.6.1-3 and OpenSC 0.26.1-2 — Replace
 
-- Requirement: non-exporting production RSA-3072 Secure Boot and RSA-PSS/SHA-256 release signing through the accepted PKCS#11 boundary.
-- Alternatives: software keys violate M3 custody; cloud KMS changes the accepted ceremony; custom PKCS#11/crypto is prohibited.
-- Maintenance/security: Yubico's signed 2.8.0 source is SHA-256 pinned in `policy/sources.lock`; libp11 is pinned through the Debian snapshot. Review Yubico, OpenSSL, libp11, and Debian advisories before updates.
-- License/distribution: Yubico components are Apache-2.0 and libp11 is LGPL-2.1-or-later; protected-runner infrastructure only.
-- Targets/boundary: isolated x86_64 Linux signing host. PKCS#11 URIs select objects only; connector/authentication configuration stays root-owned outside Git, arguments, environment values, artifacts, and logs. Native x86_64 and aarch64 hosted builders never load this production module.
-
-## SoftHSM 2.6.1-3 and OpenSC 0.26.1-2 — Retain
-
-- Requirement: exercise the protected signer's real PKCS#11 RSA-3072/PSS command path with disposable test objects before production hardware.
-- Alternatives: mocks do not cross the PKCS#11 engine boundary; production HSM tests would risk protected state.
+- Requirement: provide M3's encrypted pre-1.0 signing token and exercise the real PKCS#11 RSA-3072/PSS command path with separate disposable test objects.
+- Alternatives: PEM files expand the key interface; mocks do not cross the PKCS#11 engine boundary.
 - Maintenance/security: exact Debian snapshot versions; review Debian, SoftHSM, OpenSC, Botan, and libp11 advisories before updates.
 - License/distribution: SoftHSM is BSD-2-Clause; OpenSC is LGPL-2.1-or-later; build-image use only.
-- Targets/boundary: native x86_64 and aarch64 test hosts; fixed disposable credentials and objects are process-local, deleted after the bounded smoke test, and never enter runtime or release artifacts.
+- Targets/boundary: isolated x86_64 pre-1.0 signing host plus native x86_64 and aarch64 test hosts. Release-token storage and authentication are protected outside Git, arguments, ordinary environment values, artifacts, and logs; fixed test credentials remain disposable.

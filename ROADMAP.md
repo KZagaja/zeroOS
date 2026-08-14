@@ -16,7 +16,7 @@ Snapshot date: 2026-08-06
 | M0 — Repository Foundation | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/30998375727) |
 | M1 — Dual-Architecture UEFI Bootstrap | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/31007390950) |
 | M2 — Resident Core Runtime | Achieved | [Native x86_64 and aarch64 CI run](https://github.com/KZagaja/zeroOS/actions/runs/31083657653) |
-| M3 — Storage, Updates, and Recovery | In progress | Human promotion gates pending |
+| M3 — Storage, Updates, and Recovery | In progress | Pre-1.0 promotion gates pending |
 | M4 — Hardware and Rust Policy Services | Not started | — |
 | M5 — Raw Wayland Compositor | Not started | — |
 | M6 — zeroOS UI Toolkit | Not started | — |
@@ -126,7 +126,7 @@ Every admitted dependency must identify its owner, update path, attack surface, 
 ## Cross-cutting release rules
 
 - Security boundaries, artifact formats, service APIs, and on-disk formats are versioned before consumers depend on them.
-- Secure Boot key ownership, production signing infrastructure, key rotation/revocation, and release hosting must be specified and exercised before M3 can be achieved.
+- Secure Boot key ownership, pre-1.0 signing infrastructure, key rotation/revocation, and release hosting must be specified and exercised before M3 can be achieved; hardware-backed production custody is required at M11 before 1.0.
 - Automated functional evidence is required. Human usability research supplements it but never substitutes for it.
 - Accessibility, localization, deterministic behavior, and recovery are acceptance concerns throughout the project, not final-stage polish.
 
@@ -279,7 +279,7 @@ Shutdown rejects new mutations, sends `SIGTERM` in reverse dependency order, app
 - Immutable A/B system partitions and a separate writable user-data partition.
 - Signed system artifacts, verified boot selection, atomic slot switching, health confirmation, and automatic rollback.
 - Independently bootable recovery environment and factory-reset flow.
-- Specified Secure Boot keys, production signing, key rotation/revocation, and release hosting.
+- Specified Secure Boot keys, pre-1.0 signing, key rotation/revocation, and release hosting.
 
 **Automated acceptance criteria**
 
@@ -314,17 +314,19 @@ Data provisioning uses LUKS2 AES-XTS-plain64 with a 512-bit key and Argon2id, tw
 
 ### M3 key and promotion gates
 
-PK and KEK are offline; the recovery signer is separate and offline; the RSA-3072 production release signer is exposed only through a protected GitHub Environment signing interface. Private keys must never enter Git, artifacts, command arguments, environment variables, or logs. The operator records SHA-256 fingerprints, redacted HSM audit exports, two geographically separate encrypted backups, a verified restore test, and an emergency KEK-authorized db removal/dbx procedure offline.
+PK and KEK are offline; the recovery signer is separate and offline; the RSA-3072 release signer is exposed only through a protected GitHub Environment signing interface. Private keys must never enter Git, artifacts, command arguments, ordinary environment variables, or logs. Under [ADR 0004](docs/adr/0004-defer-hardware-signing-to-1.0.md), M3 may use a software PKCS#11 token whose backing store is on encrypted storage and must explicitly treat its keys as extractable by a compromised signing host. The operator records SHA-256 fingerprints, hash-chained signing logs, two geographically separate encrypted backups, a verified restore test, and an emergency KEK-authorized db removal/dbx procedure offline.
 
 Rotation overlaps trust: add the next db certificate under KEK, publish an old-key transition release that trusts both, switch the protected signer, then remove or revoke the old certificate under KEK. QEMU uses disposable non-production keys to exercise addition, transition, rejection, and revocation.
 
-The empty public artifact-only repository is [KZagaja/zeroOS-releases](https://github.com/KZagaja/zeroOS-releases); the source repository remains private. Under [ADR 0002](docs/adr/0002-m3-single-operator-promotion.md), M3 permanently has no independent-review or second-person-witness gate and accepts the resulting loss of separation-of-duties assurance. [ADR 0003](docs/adr/0003-m3-single-signing-host.md) uses native GitHub-hosted builders and public-install testers around one isolated x86_64 HSM signing host; signing remains non-exporting and both architectures still require native evidence. Achievement instead requires owner-only exact-`main` dispatch, main-only environments, successful exact-SHA native CI, signed/timestamped ceremony and HSM audit evidence, two encrypted geographic backups with a verified restore, a production-signed install from the implementation SHA, immutable public release artifacts, and passing native CI on the exact evidence commit. No achievement evidence or `m3-achieved` tag may be created before those gates are real.
+The empty public artifact-only repository is [KZagaja/zeroOS-releases](https://github.com/KZagaja/zeroOS-releases); the source repository remains private. Under [ADR 0002](docs/adr/0002-m3-single-operator-promotion.md), M3 permanently has no independent-review or second-person-witness gate and accepts the resulting loss of separation-of-duties assurance. [ADR 0003](docs/adr/0003-m3-single-signing-host.md) uses native GitHub-hosted builders and public-install testers around one isolated x86_64 signing host. ADR 0004 defers hardware-backed non-exportability, HSM audit, and HSM restore evidence to M11 and accepts pre-1.0 software-key extraction risk. M3 achievement instead requires owner-only exact-`main` dispatch, main-only environments, successful exact-SHA native CI, signed/timestamped ceremony and hash-chained signing evidence, two encrypted geographic backups with a verified software-token restore, a signed public install from the implementation SHA, immutable public release artifacts, and passing native CI on the exact evidence commit. No achievement evidence or `m3-achieved` tag may be created before those gates are real.
 
 **Change log:** 2026-08-06 — M3 implementation started; production key ceremony, protected signing, public release publication, independent review, and exact-commit native acceptance evidence remain pending.
 
 **Change log:** 2026-08-13 — accepted ADR 0002's permanent single-operator assurance exception; independent review and second-person witnessing are removed, while owner-only exact-main promotion, hardware audit, signed ceremony, backup/restore, immutable public release, and exact-commit native evidence remain pending.
 
 **Change log:** 2026-08-14 — accepted ADR 0003's single x86_64 HSM signing host with native GitHub-hosted builders and public-install testers; both-architecture native evidence and every custody/recovery gate remain unchanged.
+
+**Change log:** 2026-08-14 — accepted ADR 0004; M3 may use an encrypted software PKCS#11 token with explicit host-extraction risk, while YubiHSM migration, HSM audit, and hardware restore become mandatory M11/1.0 gates.
 
 ## M4 — Hardware and Rust Policy Services
 
@@ -542,6 +544,7 @@ cargo xtask test --arch aarch64
 
 - Automated certification rigs for the selected `x86_64` and `aarch64` reference devices.
 - Signed, reproducible release, installer, and recovery artifacts for both architectures.
+- YubiHSM-backed release and Secure Boot keys with completed audit, backup, restore, rotation, and software-key revocation evidence.
 - Published supported-hardware, application-compatibility, accessibility, update, and recovery evidence.
 
 **Automated acceptance criteria**
@@ -553,6 +556,7 @@ cargo xtask test --arch aarch64
 - [ ] The declared Flatpak, native Wayland, and Xwayland compatibility matrix passes.
 - [ ] Independent clean builders produce byte-identical release artifacts, or only explicitly normalized and justified differences.
 - [ ] Every published artifact has a verified signature and recorded cryptographic hash.
+- [ ] Every 1.0 release and Secure Boot signing key is newly generated and non-exportable in YubiHSM; redacted audit, two encrypted backups, destructive restore, trust-overlap migration, and software-key revocation evidence pass.
 - [ ] No unresolved release-blocking defect, security exception, or unmet earlier milestone acceptance item remains.
 
 **Acceptance commands**
@@ -580,3 +584,4 @@ Append entries; do not rewrite or remove historical decisions or milestone evide
 | 2026-08-05 | Marked M0 Repository Foundation `Achieved`. | Both native jobs passed foundation commit `1fd59d0a20a7095c5e5b9d7bfd402d3ccf78f92c` in [run 30998375727](https://github.com/KZagaja/zeroOS/actions/runs/30998375727); recorded both release hashes and the build-image digest. |
 | 2026-08-13 | Accepted ADR 0002 for M3 single-operator promotion. | Permanently removed independent review and second-person witnessing, explicitly accepting lost separation of duties; all replacement owner-only, hardware-audit, recovery, public-release, and exact-commit gates remain unmet. |
 | 2026-08-14 | Accepted ADR 0003 for one protected signing host. | Removed the unnecessary second HSM-connected runner while retaining native x86_64/aarch64 hosted builds, acceptance, and public-install tests around one non-exporting x86_64 signer. |
+| 2026-08-14 | Accepted ADR 0004 deferring hardware-backed signing to M11. | M3 uses the existing PKCS#11 interface with an encrypted software token and explicit extraction risk; YubiHSM migration and software-key revocation are mandatory before 1.0. |

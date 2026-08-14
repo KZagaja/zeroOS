@@ -63,7 +63,7 @@ recovery, ESP, firmware variables, and Secure Boot material are never reset.
 
 ## Key hierarchy and release custody
 
-PK and KEK remain offline. Production db signing and RSA release signing are
+PK and KEK remain offline. Pre-1.0 db signing and RSA release signing are
 available only through the protected signer. The recovery db
 certificate and recovery signer are independent and offline. Rotation adds the
 next db under KEK, publishes an old-key transition release trusting both
@@ -93,9 +93,11 @@ key configuration or authentication on its command line. The exact keys are
 `engine`, `selector-key`, `production-key`, `release-key`, `selector-cert`,
 `production-cert`, `recovery-cert`, `release-signer`, and `fingerprints`.
 Private-key values are PKCS#11 object-selector URIs without PIN or password
-attributes. Connector, module, and authentication configuration remains
-runner-owned. Workspace acceptance uses a disposable SoftHSM RSA-3072 object
-to cross the same libp11/OpenSSL RSA-PSS path before production hardware.
+attributes. Module and authentication configuration remains runner-owned.
+Under ADR 0004, M3 keeps the SoftHSM backing store on encrypted storage and
+explicitly accepts that a compromised signing host can copy that store and its
+credentials. Workspace acceptance uses a separate disposable token to cross
+the same libp11/OpenSSL RSA-PSS path.
 
 The public trust ceremony commits `policy/m3-trust/pk.pem`, `kek.pem`,
 `db.pem`, `next-db.pem`, `recovery.pem`, the PKCS#1 RSA public keys
@@ -122,9 +124,10 @@ release and marking it latest; public assets are never replaced after
 publication.
 
 M3 promotion still requires the real offline ceremony, signed/timestamped
-record and redacted HSM audit export, protected environments and runners, two
-encrypted geographic backups with a verified restore, immutable public
-release, production-signed Secure Boot installation on both architectures,
+record and hash-chained signing log, protected environments and runner, two
+encrypted geographic backups with a verified software-token restore, immutable
+public release, signed Secure Boot installation on both architectures,
 exact-SHA native CI, and the evidence/tag sequence in `ROADMAP.md`. ADR 0002
-permanently removes independent review and second-person witnessing and records
-the resulting single-operator compromise risk.
+permanently removes independent review and second-person witnessing; ADR 0004
+records the additional software-key extraction risk and requires migration to
+YubiHSM before 1.0.

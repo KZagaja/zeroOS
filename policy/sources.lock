@@ -1,3 +1,2 @@
 name,version,url,sha256
 linux,6.18.42,https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.42.tar.xz,35a8ef5e8fb44467e56a42b40c23c4c10a61d1e95ff8d738f285230e8bed63e7
-yubihsm-shell,2.8.0,https://developers.yubico.com/yubihsm-shell/Releases/yubihsm-shell-2.8.0.tar.gz,627a06899096f8bc81a806ef415e00cf7f08a3fc38f4b6b3f39b8129e64dd481
