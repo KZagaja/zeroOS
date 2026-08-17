@@ -3374,7 +3374,7 @@ fn validate_manifest(manifest: &str) -> Result<(), String> {
     for required in [
         "members = [\"xtask\", \"init\", \"storage\", \"updater\", \"data\", \"selector\", \"signer\"]",
         "edition = \"2024\"",
-        "license = \"LicenseRef-zeroOS-Proprietary\"",
+        "license = \"MIT\"",
         "publish = false",
         "rust-version = \"1.97.1\"",
     ] {

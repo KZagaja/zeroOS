@@ -1,7 +1,7 @@
 # Third-Party Notices
 
-zeroOS-owned source and binaries are proprietary and covered by LICENSE and
-the draft EULA.
+zeroOS-owned source and binaries are licensed under the MIT License. See
+[LICENSE](LICENSE).
 
 The build uses Rust, Cargo, LLVM/Clang/LLD, musl, cargo-deny, Debian, QEMU,
 EDK2/OVMF, gdisk, mtools, dosfstools, GNU build tools, bc, bison, flex,

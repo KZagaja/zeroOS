@@ -90,7 +90,4 @@ ledger and [AGENTS.md](AGENTS.md) for the engineering contract.
 
 ## License
 
-Copyright © 2026 Kordian Zagaja. All rights reserved. The repository is
-publicly readable, but it is not open source and no permission to use, copy,
-modify, or redistribute the code is granted. See [LICENSE](LICENSE) and
-[EULA.md](EULA.md).
+zeroOS is open source under the [MIT License](LICENSE).
